@@ -29,3 +29,13 @@ export interface PlacedItem {
   borderColor: string;
   label?: string;
 }
+
+/** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */
+export interface AddItemOptions {
+  /** Larghezza imposta in cm (es. 100 per Punta, 120 per Piatto). */
+  width?: number;
+  /** Lunghezza imposta in cm (es. 120 per Punta, 100 per Piatto). */
+  length?: number;
+  /** Rotazione iniziale in gradi: 0 = Punta (lato corto verso le porte), 90 = Piatto. */
+  rotation?: number;
+}

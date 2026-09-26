@@ -2,8 +2,8 @@ import type { VehicleConfig, PalletDefinition } from './types';
 
 // Preset dei camion della vostra flotta
 export const VEHICLE_PRESETS: VehicleConfig[] = [
-  { id: 'bilico_cc', name: 'Bilico CC / Olandese (2,50 × 13,28 m)', width: 250, length: 1328 },
-  { id: 'bilico_std', name: 'Bilico Frigo Standard (2,46 × 13,60 m)', width: 246, length: 1360 },
+  { id: 'bilico_cc', name: 'Bilico frigo Fiori (2,50 × 13,28 m)', width: 250, length: 1328 },
+  { id: 'bilico_std', name: 'Bilico frigo Standard (2,46 × 13,60 m)', width: 246, length: 1360 },
   { id: 'motrice_3a', name: 'Motrice 3 Assi (2,50 × 7,60 m)', width: 250, length: 760 },
   { id: 'custom', name: 'Personalizzato...', width: 250, length: 1360 },
 ];

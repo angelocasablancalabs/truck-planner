@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
 import type { VehicleConfig, PlacedItem } from '../types';
-import { calculateSnapPosition, hasCollision, toPrecision } from '../utils/snapping';
+import { calculateSnapPosition, hasCollision, isOutOfBounds, toPrecision } from '../utils/snapping';
 
 /** Colore d'avviso per i colli in sovrapposizione (fuori sagoma). */
 const COLLISION_COLOR = '#EF4444';
@@ -453,12 +453,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             {/* Rendering dei Colli Stivati — coordinate = cm reali del pianale */}
             {items.map((item) => {
               const isSelected = item.id === selectedItemId;
-              const colliding = hasCollision(item, items);
+              // Allarme: collisione con altri colli OPPURE sforamento della
+              // sagoma utile (es. accodamento oltre le porte posteriori).
+              const alert = hasCollision(item, items) || isOutOfBounds(item, vehicle);
 
-              // Priorità: collisione (rosso) > selezione (blu) > bordo del collo.
+              // Priorità: allarme (rosso) > selezione (blu) > bordo del collo.
               // Doppio contorno quando coesistono, così i due stati restano distinguibili.
-              const outerStroke = colliding ? COLLISION_COLOR : isSelected ? '#2563EB' : item.borderColor;
-              const outerStrokeWidth = colliding ? 2 : isSelected ? 3 : 1.5;
+              const outerStroke = alert ? COLLISION_COLOR : isSelected ? '#2563EB' : item.borderColor;
+              const outerStrokeWidth = alert ? 2 : isSelected ? 3 : 1.5;
 
               return (
                 <g
@@ -477,7 +479,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                     rx={2}
                     className={isSelected ? 'filter drop-shadow-lg' : ''}
                   />
-                  {colliding && isSelected && (
+                  {alert && isSelected && (
                     <rect
                       x={2.5}
                       y={2.5}
