@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
-import type { VehicleConfig, PlacedItem, ItemPositionUpdate } from '../types';
+import type { VehicleConfig, PlacedItem, ItemPositionUpdate, LabelDensity } from '../types';
 import {
   calculateSnapPosition,
   hasCollision,
@@ -20,6 +20,17 @@ const LASSO_FILL_OPACITY = 0.15;
 
 /** Spostamento minimo (px schermo) oltre il quale un drag non è più un click. */
 const DRAG_THRESHOLD_PX = 3;
+
+/**
+ * Opzioni del selettore di densità etichette nell'HUD (basso a sinistra).
+ * Etichette volutamente brevi per un look sobrio CAD.
+ */
+const LABEL_DENSITY_OPTIONS: { value: LabelDensity; label: string; title: string }[] = [
+  { value: 'all', label: 'Tutto', title: 'Nome cliente + quote (W × L)' },
+  { value: 'client', label: 'Cliente', title: 'Solo nome cliente' },
+  { value: 'dimensions', label: 'Misure', title: 'Solo quote (W × L)' },
+  { value: 'minimal', label: 'Minimal', title: 'Nessuna etichetta' },
+];
 
 // --- Motore Zoom & Pan (viewport CAD "infinito") ----------------------------
 /** Zoom minimo come rapporto rispetto alla vista "adatta a schermo" (0.6 = 60%). */
@@ -127,6 +138,9 @@ interface TruckCanvasProps {
   vehicle: VehicleConfig;
   items: PlacedItem[];
   selectedItemIds: string[];
+  /** Densità delle etichette stampate dentro i colli. */
+  labelDensity: LabelDensity;
+  onChangeLabelDensity: (density: LabelDensity) => void;
   onSelectItems: (ids: string[]) => void;
   onUpdateItemsPos: (updates: ItemPositionUpdate[]) => void;
 }
@@ -135,6 +149,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   vehicle,
   items,
   selectedItemIds,
+  labelDensity,
+  onChangeLabelDensity,
   onSelectItems,
   onUpdateItemsPos,
 }) => {
@@ -708,25 +724,54 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                       pointerEvents="none"
                     />
                   )}
-                  {/* Testo compatto all'interno del collo */}
-                  <text
-                    x={item.width / 2}
-                    y={item.length / 2 - 3}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="text-[11px] font-bold fill-slate-800 pointer-events-none select-none"
-                  >
-                    {item.name}
-                  </text>
-                  <text
-                    x={item.width / 2}
-                    y={item.length / 2 + 11}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="text-[9px] font-mono fill-slate-600 pointer-events-none select-none"
-                  >
-                    {item.width}×{item.length}
-                  </text>
+                  {/* Etichette interne: dipendono dalla densità scelta nell'HUD.
+                      `minimal` non stampa alcun <text> (solo blocco colorato). */}
+                  {labelDensity === 'all' && (
+                    <>
+                      <text
+                        x={item.width / 2}
+                        y={item.length / 2 - 3}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="text-[11px] font-bold fill-slate-800 pointer-events-none select-none"
+                      >
+                        {item.name}
+                      </text>
+                      <text
+                        x={item.width / 2}
+                        y={item.length / 2 + 11}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="text-[9px] font-mono fill-slate-600 pointer-events-none select-none"
+                      >
+                        {item.width}×{item.length}
+                      </text>
+                    </>
+                  )}
+
+                  {labelDensity === 'client' && (
+                    <text
+                      x={item.width / 2}
+                      y={item.length / 2}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      className="text-[12px] font-bold fill-slate-800 pointer-events-none select-none"
+                    >
+                      {item.name}
+                    </text>
+                  )}
+
+                  {labelDensity === 'dimensions' && (
+                    <text
+                      x={item.width / 2}
+                      y={item.length / 2}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      className="text-[12px] font-mono font-bold fill-slate-700 pointer-events-none select-none"
+                    >
+                      {item.width}×{item.length}
+                    </text>
+                  )}
                 </g>
               );
             })}
@@ -769,45 +814,74 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         </svg>
       </div>
 
-      {/* HUD flottante Zoom & Pan (basso a sinistra, sobrio e semi-trasparente) */}
-      <div className="absolute bottom-5 left-5 z-10 flex items-center gap-0.5 rounded-lg border border-slate-300 bg-white/85 backdrop-blur-sm px-1.5 py-1 shadow-sm">
-        <button
-          type="button"
-          onClick={() => zoomByStep(-1)}
-          disabled={!canZoomOut}
-          title="Zoom Out"
-          aria-label="Zoom Out"
-          className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-transparent"
+      {/* HUD flottante (basso a sinistra): densità etichette + Zoom & Pan */}
+      <div className="absolute bottom-5 left-5 z-10 flex flex-col items-start gap-1.5">
+        {/* Selettore compatto densità etichette (stile sobrio CAD) */}
+        <div
+          role="group"
+          aria-label="Densità etichette"
+          className="flex items-center gap-0.5 rounded-lg border border-slate-300 bg-white/90 backdrop-blur-sm px-1 py-0.5 shadow-sm"
         >
-          <Minus className="h-4 w-4" />
-        </button>
+          {LABEL_DENSITY_OPTIONS.map((option) => {
+            const isActive = labelDensity === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onChangeLabelDensity(option.value)}
+                title={option.title}
+                aria-pressed={isActive}
+                className={`rounded px-2 py-1 text-[10px] leading-none transition ${
+                  isActive
+                    ? 'bg-slate-800 text-white font-bold'
+                    : 'text-slate-500 hover:text-slate-700 font-medium hover:bg-slate-100'
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
 
-        <span className="min-w-[3.25rem] text-center text-xs font-mono font-bold text-slate-700 tabular-nums">
-          {zoomPercent}%
-        </span>
+        <div className="flex items-center gap-0.5 rounded-lg border border-slate-300 bg-white/85 backdrop-blur-sm px-1.5 py-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => zoomByStep(-1)}
+            disabled={!canZoomOut}
+            title="Zoom Out"
+            aria-label="Zoom Out"
+            className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
 
-        <button
-          type="button"
-          onClick={() => zoomByStep(1)}
-          disabled={!canZoomIn}
-          title="Zoom In"
-          aria-label="Zoom In"
-          className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+          <span className="min-w-[3.25rem] text-center text-xs font-mono font-bold text-slate-700 tabular-nums">
+            {zoomPercent}%
+          </span>
 
-        <div className="mx-1 h-5 w-px bg-slate-200" />
+          <button
+            type="button"
+            onClick={() => zoomByStep(1)}
+            disabled={!canZoomIn}
+            title="Zoom In"
+            aria-label="Zoom In"
+            className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
 
-        <button
-          type="button"
-          onClick={resetView}
-          title="Reset / Adatta a schermo (100%)"
-          aria-label="Reset / Adatta a schermo"
-          className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600"
-        >
-          <Maximize className="h-4 w-4" />
-        </button>
+          <div className="mx-1 h-5 w-px bg-slate-200" />
+
+          <button
+            type="button"
+            onClick={resetView}
+            title="Reset / Adatta a schermo (100%)"
+            aria-label="Reset / Adatta a schermo"
+            className="flex h-7 w-7 items-center justify-center rounded text-slate-600 transition hover:bg-slate-100 hover:text-blue-600"
+          >
+            <Maximize className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -83,19 +83,50 @@
   - `selectedItems.length > 1` → badge `X Colli`, campo Nome/Cliente cumulativo (placeholder `Assegna nome a tutti...`, valore vuoto se i nomi divergono), **palette batch** che colora istantaneamente tutti i colli, `Cancella (X)` in rosso mattone istituzionale e rotazione di gruppo.
 - **Rotazione di gruppo:** la Barra Spaziatrice ruota tutti i colli selezionati, ciascuno sul proprio baricentro con riallineamento magnetico.
 
+### I. Modulo "Stiva Sequenza" Multi-Tappa (Sprint C)
+- **Selettore a schede in cima alla sidebar** (`ControlDeck.tsx`), sotto l'intestazione "TRUCK PLANNER":
+  - `[ 📦 Carico Diretto ]` → catalogo manuale storico (invariato).
+  - `[ ⚡ Stiva Sequenza ]` → generatore progressivo a lotti/tappe.
+  - Scheda attiva `bg-white shadow-sm font-bold`, inattiva `text-slate-500 hover:text-slate-700`.
+- **Scheda "Stiva Sequenza":** mantiene in alto la **Configurazione Mezzo** e in basso il **Riepilogo Stiva**; al centro il generatore.
+- **Righe Lotto / Tappa** (card compatta su due linee):
+  - Indice tappa, **Q.tà** (numero, min `1`, max `99`, default `1`).
+  - **Formato**: `PLT EUR`, `PLT INDU`, `PLT ½ EUR`, `CC`, `EC` (default `PLT EUR`).
+  - **Toggle Orientamento** `↔ Piatto` / `↕ Punta` (default Piatto).
+  - **Cliente**: input testuale con placeholder `Es. COOP`.
+  - **Pallino colore** cliccabile: cicla i 7 colori pastello, assegnati **a rotazione automatica** ad ogni nuova riga (tappe distinguibili a vista).
+  - **Cestino** (`Trash2` `w-3.5 h-3.5`) per rimuovere la riga.
+- **`+ Aggiungi Riga Spedizione`** in coda alla lista.
+- **Applicazione selezionabile:** `Sostituisci` (default, azzera il pianale) / `Accoda` (mantiene il carico e prosegue la sequenza).
+- **Azione primaria `⚡ Esegui Stiva Sequenziale`** (`bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded shadow`), disabilitata a lista vuota.
+- **Motore `handleExecuteSequence(batches, mode)`** in `App.tsx`:
+  - Ordine di stiva = ordine delle righe (tappa 1 → N), riempimento progressivo **Cabina → Porte posteriori**.
+  - Per ogni lotto, per $i = 1 \dots \text{quantity}$: lookup in `PALLET_CATALOG`, calcolo di $W/L$ secondo l'orientamento (Piatto: $W=\max(D_1,D_2)$, $L=\min$; Punta: $W=\min$, $L=\max$), `findSmartSpawnPosition(W, L, vehicle, currentPlacedItems)`, creazione del `PlacedItem` con `name: batch.clientName || pallet.name` e colore di tappa.
+  - Il collo appena creato entra subito in `currentPlacedItems`, quindi il collo successivo calcola lo spawn sul pianale aggiornato (**un solo `setItems` atomico** a fine sequenza).
+- **Verifica headless (Chrome):** batch `3 × EUR [COOP]` + `2 × INDU [CONAD]` → atterraggio in ordine `(0,0) (120,0) (0,80) (120,80) (0,160)`, formati/quote e nomi cliente corretti; modalità `Accoda` → 10 colli totali; nessun errore runtime in console.
+
+### J. Toggle Densità Etichette (Sprint C)
+- **Nuovo tipo `LabelDensity`** (`src/types.ts`): `'all' | 'client' | 'dimensions' | 'minimal'`; stato `labelDensity` in `App.tsx` (default `'all'`) passato a `TruckCanvas`.
+- **Selettore a pastiglia nell'HUD flottante in basso a sinistra** (`TruckCanvas.tsx`), sopra i comandi Zoom/Pan: `[ Tutto | Cliente | Misure | Minimal ]`, stile sobrio CAD `text-[10px]`, attivo `bg-slate-800 text-white font-bold`.
+- **Rendering dei colli:**
+  - `all` → nome + quote $W \times L$ (comportamento storico).
+  - `client` → **solo nome**, centrato in verticale, `text-[12px] font-bold`.
+  - `dimensions` → **solo quote** `${item.width}×${item.length}` centrate.
+  - `minimal` → **nessun `<text>` interno**, solo il blocco geometrico colorato.
+
 ---
 
 ## 3. MAPPA ARCHITETTURALE DEI FILE
-- `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`).
+- `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`, `LabelDensity`, `SequenceBatchItem`).
 - `src/constants.ts`: Presets veicoli, catalogo colli e definizione `CUSTOM_PALLET` (fuori sagoma).
 - `src/utils/snapping.ts`: Modulo matematico puro (`calculateSnapPosition`, `isRectColliding`, `isOutOfBounds`, `findSmartSpawnPosition`).
-- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore e segnalazione allarmi.
-- `src/components/ControlDeck.tsx`: Plancia di comando, righe dense colli, selettore adattivo, box Formato Libero / Fuori Sagoma, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
-- `src/App.tsx`: Stato globale della stiva e della selezione multipla (`selectedItemIds`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, `handleUpdateItemsPos` / `handleUpdateItemProperties`.
+- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
+- `src/components/ControlDeck.tsx`: Plancia di comando con selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
+- `src/App.tsx`: Stato globale della stiva, della selezione multipla (`selectedItemIds`) e della densità etichette (`labelDensity`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, motore di stiva sequenziale (`handleExecuteSequence`), `handleUpdateItemsPos` / `handleUpdateItemProperties`.
 - `AGENTS.md`: File di contesto e direttive tassative per gli agent AI.
 
 ---
 
 ## 4. PROSSIMI PASSI (NEXT SPRINT ROADMAP)
-1. **Modulo "Stiva Sequenza" (Multi-Tappa / Batch):** Griglia di inserimento progressivo per tappe di viaggio con caricamento ordinato da Cabina a Porte.
+1. **Multi-Camion:** gestione contemporanea di più mezzi/rimorchi nella stessa sessione di carico.
 2. **Condivisione & Output:** Pulsanti "Copia Immagine" negli appunti (PNG) per WhatsApp/Email e "Salva PDF" report di carico.

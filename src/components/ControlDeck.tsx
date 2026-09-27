@@ -1,7 +1,38 @@
 import React, { useState } from 'react';
-import type { VehicleConfig, PlacedItem, PalletDefinition, AddItemOptions } from '../types';
+import type {
+  VehicleConfig,
+  PlacedItem,
+  PalletDefinition,
+  AddItemOptions,
+  SequenceBatchItem,
+} from '../types';
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET } from '../constants';
 import { Truck, RotateCw, Trash2, Plus, Info, ArrowUpDown, ArrowLeftRight } from 'lucide-react';
+
+/** Scheda attiva nella sidebar: carico diretto (manuale) o stiva sequenziale. */
+type DeckTab = 'direct' | 'sequence';
+
+/** Modalità di applicazione della sequenza sul pianale. */
+type SequenceMode = 'replace' | 'append';
+
+/** Limiti di quantità per riga del generatore sequenziale. */
+const SEQUENCE_MIN_QUANTITY = 1;
+const SEQUENCE_MAX_QUANTITY = 99;
+
+/**
+ * Formati disponibili nel generatore sequenziale.
+ * `code` è la chiave di `PALLET_CATALOG`, `label` l'etichetta mostrata all'operatore.
+ */
+const SEQUENCE_FORMATS: { code: string; label: string }[] = [
+  { code: 'EUR', label: 'PLT EUR' },
+  { code: 'INDU', label: 'PLT INDU' },
+  { code: 'HALF_EUR', label: 'PLT ½ EUR' },
+  { code: 'CC', label: 'CC' },
+  { code: 'EC', label: 'EC' },
+];
+
+/** Formato di default di una nuova riga di spedizione. */
+const DEFAULT_SEQUENCE_FORMAT = 'EUR';
 
 /** Limiti fisici del collo "Formato Libero / Fuori Sagoma" (cm). */
 const CUSTOM_MIN_WIDTH = 10;
@@ -31,6 +62,8 @@ interface ControlDeckProps {
   onDeleteSelected: () => void;
   onClearAll: () => void;
   onUpdateItemProperties: (target: string | string[], updates: Partial<PlacedItem>) => void;
+  /** Motore di stiva sequenziale (multi-tappa): sostituisce o accoda i lotti. */
+  onExecuteSequence: (batches: SequenceBatchItem[], mode: SequenceMode) => void;
   selectedItems: PlacedItem[];
   items: PlacedItem[];
 }
@@ -43,10 +76,17 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onDeleteSelected,
   onClearAll,
   onUpdateItemProperties,
+  onExecuteSequence,
   selectedItems,
   items,
 }) => {
   const [bulkLength, setBulkLength] = useState<number>(2.0); // Metri per lo sfuso
+  // Scheda attiva: carico diretto (manuale) oppure stiva sequenziale a tappe.
+  const [activeTab, setActiveTab] = useState<DeckTab>('direct');
+  // Righe lotto/tappa del generatore sequenziale.
+  const [sequenceRows, setSequenceRows] = useState<SequenceBatchItem[]>([]);
+  // Modalità di applicazione: sostituisce l'intero carico oppure lo accoda.
+  const [sequenceMode, setSequenceMode] = useState<SequenceMode>('replace');
 
   // Formato Libero / Fuori Sagoma: dimensioni e nome arbitrari
   const [customName, setCustomName] = useState<string>('Collo Custom');
@@ -121,6 +161,59 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     });
   };
 
+  // --- Generatore "Stiva Sequenza" (Multi-Tappa) ---------------------------
+
+  /**
+   * Nuova riga lotto/tappa. Il colore pastello ruota automaticamente in base
+   * alla posizione della riga, così tappe diverse restano distinguibili a vista.
+   */
+  const createSequenceRow = (index: number): SequenceBatchItem => {
+    const swatch = COLOR_PALETTE[index % COLOR_PALETTE.length];
+    return {
+      id: `seq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      quantity: 1,
+      palletCode: DEFAULT_SEQUENCE_FORMAT,
+      orientation: 'piatto',
+      clientName: '',
+      color: swatch.fill,
+      borderColor: swatch.border,
+    };
+  };
+
+  const handleAddSequenceRow = () => {
+    setSequenceRows((prev) => [...prev, createSequenceRow(prev.length)]);
+  };
+
+  const handleUpdateSequenceRow = (id: string, updates: Partial<SequenceBatchItem>) => {
+    setSequenceRows((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...updates } : row))
+    );
+  };
+
+  const handleRemoveSequenceRow = (id: string) => {
+    setSequenceRows((prev) => prev.filter((row) => row.id !== id));
+  };
+
+  /** Cicla la pastiglia colore della riga tra i 7 colori pastello della palette. */
+  const handleCycleSequenceColor = (id: string) => {
+    setSequenceRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== id) return row;
+        const currentIndex = COLOR_PALETTE.findIndex(
+          (swatch) => swatch.fill.toLowerCase() === row.color.toLowerCase()
+        );
+        const next = COLOR_PALETTE[(currentIndex + 1) % COLOR_PALETTE.length];
+        return { ...row, color: next.fill, borderColor: next.border };
+      })
+    );
+  };
+
+  /** Passa i lotti al motore di stiva sequenziale in `App.tsx`. */
+  const handleRunSequence = () => {
+    if (sequenceRows.length === 0) return;
+    onExecuteSequence(sequenceRows, sequenceMode);
+  };
+
   // Calcolo statistiche veloci
   const countsByCode = items.reduce((acc, curr) => {
     acc[curr.name] = (acc[curr.name] || 0) + 1;
@@ -136,6 +229,34 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           TRUCK PLANNER
         </h1>
         <p className="text-xs text-slate-500 font-medium">Gestione Carico 2D Vettoriale</p>
+      </div>
+
+      {/* Selettore a schede: Carico Diretto | Stiva Sequenza */}
+      <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab('direct')}
+          aria-pressed={activeTab === 'direct'}
+          className={`rounded-md px-2 py-1.5 text-[11px] transition ${
+            activeTab === 'direct'
+              ? 'bg-white shadow-sm font-bold text-slate-800'
+              : 'text-slate-500 hover:text-slate-700 font-medium'
+          }`}
+        >
+          📦 Carico Diretto
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('sequence')}
+          aria-pressed={activeTab === 'sequence'}
+          className={`rounded-md px-2 py-1.5 text-[11px] transition ${
+            activeTab === 'sequence'
+              ? 'bg-white shadow-sm font-bold text-slate-800'
+              : 'text-slate-500 hover:text-slate-700 font-medium'
+          }`}
+        >
+          ⚡ Stiva Sequenza
+        </button>
       </div>
 
       {/* Selettore Mezzo */}
@@ -204,7 +325,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         )}
       </div>
 
-      {/* Catalogo Rapido Inserimento */}
+      {/* ---- Scheda: Carico Diretto (catalogo manuale) ---- */}
+      {activeTab === 'direct' && (
       <div className="space-y-3">
         <div className="flex justify-between items-center">
           <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
@@ -395,6 +517,185 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           </button>
         </div>
       </div>
+      )}
+
+      {/* ---- Scheda: Stiva Sequenza (Multi-Tappa) ---- */}
+      {activeTab === 'sequence' && (
+        <div className="space-y-3">
+          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+            Lotti / Tappe di Consegna
+          </label>
+
+          {sequenceRows.length === 0 && (
+            <div className="rounded border border-dashed border-slate-300 bg-slate-50 p-3 text-[11px] text-slate-500 italic">
+              Nessuna tappa: aggiungi una riga e indica formato, quantità e cliente.
+              La stiva parte dalla Cabina e procede verso le Porte.
+            </div>
+          )}
+
+          {/* Lista righe lotto / tappa */}
+          <div className="space-y-1.5">
+            {sequenceRows.map((row, index) => {
+              const isPiatto = row.orientation === 'piatto';
+              const swatchLabel =
+                COLOR_PALETTE.find(
+                  (swatch) => swatch.fill.toLowerCase() === row.color.toLowerCase()
+                )?.label ?? 'Colore';
+
+              return (
+                <div
+                  key={row.id}
+                  className="rounded border border-slate-200 bg-white p-2 space-y-1.5"
+                >
+                  {/* Riga 1: tappa, quantità, formato, orientamento */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-4 shrink-0 text-center text-[10px] font-mono font-bold text-slate-400">
+                      {index + 1}
+                    </span>
+
+                    <label className="flex items-center gap-1 shrink-0">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">
+                        Qtà
+                      </span>
+                      <input
+                        type="number"
+                        min={SEQUENCE_MIN_QUANTITY}
+                        max={SEQUENCE_MAX_QUANTITY}
+                        step={1}
+                        value={row.quantity}
+                        onChange={(e) =>
+                          handleUpdateSequenceRow(row.id, {
+                            quantity: Number(e.target.value) || SEQUENCE_MIN_QUANTITY,
+                          })
+                        }
+                        title="Quantità di colli per questa tappa"
+                        className="w-12 bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded px-1 py-1 font-mono text-center focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </label>
+
+                    <select
+                      value={row.palletCode}
+                      onChange={(e) =>
+                        handleUpdateSequenceRow(row.id, { palletCode: e.target.value })
+                      }
+                      title="Formato collo"
+                      className="flex-1 min-w-0 bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      {SEQUENCE_FORMATS.map((format) => (
+                        <option key={format.code} value={format.code}>
+                          {format.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleUpdateSequenceRow(row.id, {
+                          orientation: isPiatto ? 'punta' : 'piatto',
+                        })
+                      }
+                      title={isPiatto ? 'Piatto: lato lungo verso Cabina/Porte' : 'Punta: lato corto verso Cabina/Porte'}
+                      className="shrink-0 flex items-center gap-1 px-1.5 py-1 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 rounded transition text-[10px] leading-none font-semibold text-slate-700 whitespace-nowrap"
+                    >
+                      <span className="text-[11px] leading-none">
+                        {isPiatto ? '↔' : '↕'}
+                      </span>
+                      {isPiatto ? 'Piatto' : 'Punta'}
+                    </button>
+                  </div>
+
+                  {/* Riga 2: colore, cliente, rimozione */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleCycleSequenceColor(row.id)}
+                      title={`Colore tappa: ${swatchLabel} (click per cambiare)`}
+                      aria-label={`Colore tappa ${swatchLabel}`}
+                      className="h-5 w-5 shrink-0 rounded-full border transition hover:scale-110 hover:ring-1 hover:ring-slate-400"
+                      style={{ backgroundColor: row.color, borderColor: row.borderColor }}
+                    />
+
+                    <input
+                      type="text"
+                      value={row.clientName}
+                      onChange={(e) =>
+                        handleUpdateSequenceRow(row.id, { clientName: e.target.value })
+                      }
+                      placeholder="Es. COOP"
+                      className="flex-1 min-w-0 bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded px-1.5 py-1 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSequenceRow(row.id)}
+                      title="Rimuovi riga"
+                      aria-label="Rimuovi riga spedizione"
+                      className="shrink-0 p-1 rounded text-slate-400 hover:text-red-800 hover:bg-red-50 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Aggiungi riga in coda */}
+          <button
+            type="button"
+            onClick={handleAddSequenceRow}
+            className="w-full bg-slate-50 border border-slate-200 hover:bg-blue-50 hover:border-blue-400 text-slate-700 text-xs font-semibold py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition"
+          >
+            <Plus className="w-3.5 h-3.5 text-slate-500" /> Aggiungi Riga Spedizione
+          </button>
+
+          {/* Modalità di applicazione sul pianale */}
+          <div className="space-y-1">
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Applicazione
+            </span>
+            <div className="grid grid-cols-2 gap-1 rounded bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setSequenceMode('replace')}
+                aria-pressed={sequenceMode === 'replace'}
+                title="Azzera il pianale e stiva solo la sequenza"
+                className={`rounded px-2 py-1 text-[10px] transition ${
+                  sequenceMode === 'replace'
+                    ? 'bg-white shadow-sm font-bold text-slate-800'
+                    : 'text-slate-500 hover:text-slate-700 font-medium'
+                }`}
+              >
+                Sostituisci
+              </button>
+              <button
+                type="button"
+                onClick={() => setSequenceMode('append')}
+                aria-pressed={sequenceMode === 'append'}
+                title="Mantieni il carico attuale e accoda la sequenza"
+                className={`rounded px-2 py-1 text-[10px] transition ${
+                  sequenceMode === 'append'
+                    ? 'bg-white shadow-sm font-bold text-slate-800'
+                    : 'text-slate-500 hover:text-slate-700 font-medium'
+                }`}
+              >
+                Accoda
+              </button>
+            </div>
+          </div>
+
+          {/* Azione primaria: esegue la stiva progressiva Cabina → Porte */}
+          <button
+            type="button"
+            onClick={handleRunSequence}
+            disabled={sequenceRows.length === 0}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded shadow transition disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-xs flex items-center justify-center gap-1.5"
+          >
+            ⚡ Esegui Stiva Sequenziale
+          </button>
+        </div>
+      )}
 
       {/* Azioni Rapide Oggetto Selezionato (singolo o gruppo) */}
       {selectedItems.length > 0 && (

@@ -5,8 +5,10 @@ import type {
   PalletDefinition,
   AddItemOptions,
   ItemPositionUpdate,
+  LabelDensity,
+  SequenceBatchItem,
 } from './types';
-import { VEHICLE_PRESETS } from './constants';
+import { VEHICLE_PRESETS, PALLET_CATALOG } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import {
@@ -19,11 +21,17 @@ import {
 /** Tolleranza di aggancio magnetico applicata dopo una rotazione (cm). */
 const ROTATION_SNAP_THRESHOLD = 10;
 
+/** Limiti di quantità per riga del modulo "Stiva Sequenza". */
+const SEQUENCE_MIN_QUANTITY = 1;
+const SEQUENCE_MAX_QUANTITY = 99;
+
 export default function App() {
   const [vehicle, setVehicle] = useState<VehicleConfig>(VEHICLE_PRESETS[0]); // Default CC Olandese
   const [items, setItems] = useState<PlacedItem[]>([]);
   // Selezione multipla: lista ordinata di ID selezionati ([] = nessuna selezione).
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  // Densità delle etichette stampate sui colli (default: nome + quote).
+  const [labelDensity, setLabelDensity] = useState<LabelDensity>('all');
 
   /** Imposta l'intera lista di selezione (sostituzione, non toggle). */
   const handleSelectItems = useCallback((ids: string[]) => {
@@ -54,6 +62,75 @@ export default function App() {
     setItems((prev) => [...prev, newItem]);
     setSelectedItemIds([newItem.id]);
   };
+
+  /**
+   * Motore di Stiva Sequenziale (Multi-Tappa).
+   *
+   * Stiva i lotti nell'ordine della lista, riempiendo progressivamente il
+   * pianale dalla Cabina verso le Porte posteriori: ogni collo viene piazzato
+   * con `findSmartSpawnPosition` sul pianale GIÀ aggiornato dai colli
+   * precedenti, così la sequenza di tappe risulta rispettata.
+   *
+   * @param batches Lotti da stivare, nell'ordine di consegna (tappa 1 → N).
+   * @param mode    `replace` (default) azzera il carico corrente; `append` accoda.
+   */
+  const handleExecuteSequence = useCallback(
+    (batches: SequenceBatchItem[], mode: 'replace' | 'append' = 'replace') => {
+      if (batches.length === 0) return;
+
+      setItems((prev) => {
+        // Accumulatore locale: il pianale "corrente" su cui calcolare gli spawn.
+        let current: PlacedItem[] = mode === 'replace' ? [] : [...prev];
+        let counter = 0;
+
+        for (const batch of batches) {
+          const pallet = PALLET_CATALOG.find((p) => p.code === batch.palletCode);
+          if (!pallet) continue;
+
+          // Piatto: lato lungo verso Cabina/Porte (W = max, L = min).
+          // Punta:  lato corto verso Cabina/Porte (W = min, L = max).
+          const d1 = pallet.width;
+          const d2 = pallet.length;
+          const isPiatto = batch.orientation === 'piatto';
+          const width = isPiatto ? Math.max(d1, d2) : Math.min(d1, d2);
+          const length = isPiatto ? Math.min(d1, d2) : Math.max(d1, d2);
+
+          const quantity = Math.min(
+            SEQUENCE_MAX_QUANTITY,
+            Math.max(SEQUENCE_MIN_QUANTITY, Math.floor(batch.quantity) || SEQUENCE_MIN_QUANTITY)
+          );
+
+          for (let i = 0; i < quantity; i++) {
+            counter += 1;
+            const spawn = findSmartSpawnPosition(width, length, vehicle, current);
+
+            const newItem: PlacedItem = {
+              id: `${pallet.code}_${Date.now()}_${counter}_${Math.random()
+                .toString(36)
+                .slice(2, 6)}`,
+              code: pallet.code,
+              name: batch.clientName.trim() || pallet.name,
+              width,
+              length,
+              x: spawn.x,
+              y: spawn.y,
+              rotation: isPiatto ? 90 : 0,
+              color: batch.color || pallet.color,
+              borderColor: batch.borderColor || pallet.borderColor,
+            };
+
+            current = [...current, newItem];
+          }
+        }
+
+        // Aggiornamento atomico finale: un solo nuovo riferimento di stato.
+        return current;
+      });
+
+      setSelectedItemIds([]);
+    },
+    [vehicle]
+  );
 
   /**
    * Aggiornamento simultaneo delle coordinate di più colli (drag singolo e di
@@ -191,6 +268,8 @@ export default function App() {
           vehicle={vehicle}
           items={items}
           selectedItemIds={selectedItemIds}
+          labelDensity={labelDensity}
+          onChangeLabelDensity={setLabelDensity}
           onSelectItems={handleSelectItems}
           onUpdateItemsPos={handleUpdateItemsPos}
         />
@@ -205,6 +284,7 @@ export default function App() {
           onRotateSelected={handleRotateSelected}
           onDeleteSelected={handleDeleteSelected}
           onUpdateItemProperties={handleUpdateItemProperties}
+          onExecuteSequence={handleExecuteSequence}
           onClearAll={() => {
             setItems([]);
             setSelectedItemIds([]);

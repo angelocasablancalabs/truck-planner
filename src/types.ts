@@ -41,6 +41,29 @@ export interface ItemPositionUpdate {
   y: number;
 }
 
+/**
+ * Densità delle etichette stampate sopra ogni collo nel canvas:
+ * - `all`:        nome cliente + quote (W × L) — comportamento storico.
+ * - `client`:     solo il nome, centrato e più leggibile.
+ * - `dimensions`: solo le quote, centrate.
+ * - `minimal`:    nessun testo, solo il blocco geometrico colorato.
+ */
+export type LabelDensity = 'all' | 'client' | 'dimensions' | 'minimal';
+
+/**
+ * Riga del modulo "Stiva Sequenza" (multi-tappa): descrive un lotto di colli
+ * da stivare progressivamente dalla Cabina verso le Porte posteriori.
+ */
+export interface SequenceBatchItem {
+  id: string;
+  quantity: number;
+  palletCode: string; // 'INDU' | 'EUR' | 'HALF_EUR' | 'CC' | 'EC'
+  orientation: 'piatto' | 'punta';
+  clientName: string;
+  color: string;
+  borderColor: string;
+}
+
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */
 export interface AddItemOptions {
   /** Larghezza imposta in cm (es. 100 per Punta, 120 per Piatto). */
