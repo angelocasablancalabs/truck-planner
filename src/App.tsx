@@ -11,6 +11,7 @@ import type {
 import { VEHICLE_PRESETS, PALLET_CATALOG } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
+import { PrintReport } from './components/PrintReport';
 import {
   calculateSnapPosition,
   findSmartSpawnPosition,
@@ -261,38 +262,48 @@ export default function App() {
     .filter((item): item is PlacedItem => item !== undefined);
 
   return (
-    <div className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans">
-      {/* Sinistra: Telaio Camion */}
-      <div className="flex-1 h-full">
-        <TruckCanvas
-          vehicle={vehicle}
-          items={items}
-          selectedItemIds={selectedItemIds}
-          labelDensity={labelDensity}
-          onChangeLabelDensity={setLabelDensity}
-          onSelectItems={handleSelectItems}
-          onUpdateItemsPos={handleUpdateItemsPos}
-        />
+    <>
+      {/* Interfaccia interattiva: nascosta integralmente in fase di stampa. */}
+      <div
+        id="screen-app"
+        className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans print:hidden"
+      >
+        {/* Sinistra: Telaio Camion */}
+        <div className="flex-1 h-full">
+          <TruckCanvas
+            vehicle={vehicle}
+            items={items}
+            selectedItemIds={selectedItemIds}
+            labelDensity={labelDensity}
+            onChangeLabelDensity={setLabelDensity}
+            onSelectItems={handleSelectItems}
+            onUpdateItemsPos={handleUpdateItemsPos}
+          />
+        </div>
+
+        {/* Destra: Plancia di Comando */}
+        <div className="w-80 md:w-96 h-full flex-shrink-0">
+          <ControlDeck
+            vehicle={vehicle}
+            onSelectVehicle={setVehicle}
+            onAddItem={handleAddItem}
+            onRotateSelected={handleRotateSelected}
+            onDeleteSelected={handleDeleteSelected}
+            onUpdateItemProperties={handleUpdateItemProperties}
+            onExecuteSequence={handleExecuteSequence}
+            onClearAll={() => {
+              setItems([]);
+              setSelectedItemIds([]);
+            }}
+            selectedItems={selectedItems}
+            items={items}
+            labelDensity={labelDensity}
+          />
+        </div>
       </div>
 
-      {/* Destra: Plancia di Comando */}
-      <div className="w-80 md:w-96 h-full flex-shrink-0">
-        <ControlDeck
-          vehicle={vehicle}
-          onSelectVehicle={setVehicle}
-          onAddItem={handleAddItem}
-          onRotateSelected={handleRotateSelected}
-          onDeleteSelected={handleDeleteSelected}
-          onUpdateItemProperties={handleUpdateItemProperties}
-          onExecuteSequence={handleExecuteSequence}
-          onClearAll={() => {
-            setItems([]);
-            setSelectedItemIds([]);
-          }}
-          selectedItems={selectedItems}
-          items={items}
-        />
-      </div>
-    </div>
+      {/* Scheda di carico A4: presente nel DOM, visibile solo su carta. */}
+      <PrintReport vehicle={vehicle} items={items} />
+    </>
   );
 }

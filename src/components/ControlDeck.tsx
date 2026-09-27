@@ -1,16 +1,36 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type {
   VehicleConfig,
   PlacedItem,
   PalletDefinition,
   AddItemOptions,
   SequenceBatchItem,
+  LabelDensity,
 } from '../types';
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET } from '../constants';
-import { Truck, RotateCw, Trash2, Plus, Info, ArrowUpDown, ArrowLeftRight } from 'lucide-react';
+import { copyCanvasToClipboard } from '../utils/export';
+import {
+  Truck,
+  RotateCw,
+  Trash2,
+  Plus,
+  Info,
+  ArrowUpDown,
+  ArrowLeftRight,
+  Copy,
+  Check,
+  Printer,
+  Download,
+} from 'lucide-react';
 
 /** Scheda attiva nella sidebar: carico diretto (manuale) o stiva sequenziale. */
 type DeckTab = 'direct' | 'sequence';
+
+/** Esito dell'ultima esportazione immagine (feedback temporaneo sul pulsante). */
+type CopyFeedback = 'idle' | 'copied' | 'downloaded';
+
+/** Durata (ms) del feedback verde "Copiato!" sul pulsante di esportazione. */
+const COPY_FEEDBACK_MS = 2500;
 
 /** Modalità di applicazione della sequenza sul pianale. */
 type SequenceMode = 'replace' | 'append';
@@ -66,6 +86,8 @@ interface ControlDeckProps {
   onExecuteSequence: (batches: SequenceBatchItem[], mode: SequenceMode) => void;
   selectedItems: PlacedItem[];
   items: PlacedItem[];
+  /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
+  labelDensity: LabelDensity;
 }
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
@@ -79,6 +101,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onExecuteSequence,
   selectedItems,
   items,
+  labelDensity,
 }) => {
   const [bulkLength, setBulkLength] = useState<number>(2.0); // Metri per lo sfuso
   // Scheda attiva: carico diretto (manuale) oppure stiva sequenziale a tappe.
@@ -92,6 +115,38 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   const [customName, setCustomName] = useState<string>('Collo Custom');
   const [customWidth, setCustomWidth] = useState<number>(200);
   const [customLength, setCustomLength] = useState<number>(150);
+
+  // --- Condivisione & Output (Sprint D) -----------------------------------
+  // Esito dell'ultima esportazione: alimenta il feedback temporaneo del pulsante.
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>('idle');
+  const [isCopying, setIsCopying] = useState<boolean>(false);
+  // Timer di reset del feedback: si spegne da solo dopo 2,5 secondi.
+  const copyFeedbackTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+    },
+    []
+  );
+
+  /**
+   * Esporta il pianale in PNG: copia negli appunti di sistema e, se il browser
+   * nega l'accesso, scarica automaticamente `piano-di-carico.png`.
+   * Il pulsante mostra l'esito ("Copiato!" / "PNG salvato") per 2,5 secondi.
+   */
+  const handleCopyImage = async () => {
+    if (isCopying) return;
+    setIsCopying(true);
+
+    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity);
+
+    setIsCopying(false);
+    setCopyFeedback(copied ? 'copied' : 'downloaded');
+
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = window.setTimeout(() => setCopyFeedback('idle'), COPY_FEEDBACK_MS);
+  };
 
   // Selezione singola o multipla
   const selectedItem = selectedItems.length === 1 ? selectedItems[0] : null;
@@ -220,8 +275,23 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     return acc;
   }, {} as Record<string, number>);
 
+  // Etichetta, icona e stile del pulsante di esportazione immagine.
+  const copyLabel =
+    copyFeedback === 'copied'
+      ? 'Copiato!'
+      : copyFeedback === 'downloaded'
+        ? 'PNG salvato'
+        : 'Copia Immagine';
+  const CopyIcon = copyFeedback === 'copied' ? Check : copyFeedback === 'downloaded' ? Download : Copy;
+  const copyButtonClass =
+    copyFeedback === 'copied'
+      ? 'border-green-300 bg-green-50 text-green-700'
+      : copyFeedback === 'downloaded'
+        ? 'border-amber-300 bg-amber-50 text-amber-700'
+        : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400 hover:bg-blue-50';
+
   return (
-    <div className="w-full h-full bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto space-y-6">
+    <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto space-y-6">
       {/* Header */}
       <div className="border-b border-slate-200 pb-3">
         <h1 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2">
@@ -229,6 +299,33 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           TRUCK PLANNER
         </h1>
         <p className="text-xs text-slate-500 font-medium">Gestione Carico 2D Vettoriale</p>
+      </div>
+
+      {/* Barra comandi rapida: Copia Immagine (PNG) + Stampa / PDF */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          id="btn-copy-image"
+          onClick={handleCopyImage}
+          disabled={isCopying}
+          aria-live="polite"
+          title="Copia il pianale negli appunti come immagine PNG ad alta risoluzione"
+          className={`flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 disabled:cursor-wait ${copyButtonClass}`}
+        >
+          <CopyIcon className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{copyLabel}</span>
+        </button>
+
+        <button
+          type="button"
+          id="btn-print-report"
+          onClick={() => window.print()}
+          title="Stampa la scheda di carico A4 o salvala in PDF"
+          className="flex items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+        >
+          <Printer className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Stampa / PDF</span>
+        </button>
       </div>
 
       {/* Selettore a schede: Carico Diretto | Stiva Sequenza */}

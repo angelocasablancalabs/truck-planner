@@ -814,8 +814,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         </svg>
       </div>
 
-      {/* HUD flottante (basso a sinistra): densità etichette + Zoom & Pan */}
-      <div className="absolute bottom-5 left-5 z-10 flex flex-col items-start gap-1.5">
+      {/* HUD flottante (basso a sinistra): densità etichette + Zoom & Pan.
+          `print:hidden`: l'HUD non deve comparire sulla scheda A4 stampata. */}
+      <div className="canvas-hud print:hidden absolute bottom-5 left-5 z-10 flex flex-col items-start gap-1.5">
         {/* Selettore compatto densità etichette (stile sobrio CAD) */}
         <div
           role="group"

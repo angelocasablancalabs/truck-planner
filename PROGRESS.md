@@ -114,19 +114,43 @@
   - `dimensions` → **solo quote** `${item.width}×${item.length}` centrate.
   - `minimal` → **nessun `<text>` interno**, solo il blocco geometrico colorato.
 
+### K. Condivisione & Output — "Copia Immagine" PNG & Scheda A4 (Sprint D)
+- **Modulo `src/utils/export.ts`** (fortemente tipizzato, `import type` per ogni interfaccia):
+  - `copyCanvasToClipboard(vehicle, items, labelDensity): Promise<boolean>` — genera lo snapshot PNG pulito del pianale e lo copia negli appunti di sistema; restituisce `true` se copiato, `false` se è scattato il fallback. Non lancia mai eccezioni.
+  - **Ingombro dinamico:** `maxY = Math.max(vehicle.length, ...items.map(i => i.y + i.length)) + 50` → anche i colli che sforano dalle porte posteriori restano nell'immagine, mai tagliati.
+  - **SVG autonomo e pulito** (`buildPianoSvg`): sfondo bianco, piano di carico, tacche metriche ogni metro con quota a sinistra, tutti i colli con colore/bordo/testo secondo `labelDensity`, sponde laterali, parete Cabina, linea tratteggiata delle porte e didascalie. Nessun contorno blu di selezione, nessun lasso, nessun elemento di HUD.
+  - **Rasterizzazione 2x:** l'SVG è disegnato su un `<canvas>` offscreen a larghezza base 1200 px × 2 (2400 px reali) per la massima nitidezza su Retina/zoom; il fattore si riduce automaticamente solo se l'area supererebbe i limiti di canvas del browser.
+  - **Appunti + fallback:** `await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])`; a qualsiasi rifiuto (permessi limitati, contesto non sicuro, API assente) scarica automaticamente `piano-di-carico.png`.
+
+### L. Scheda di Carico A4 / PDF (Sprint D)
+- **`src/components/PrintReport.tsx`:** componente montato accanto all'app e invisibile a schermo (`#print-report`):
+  - **Header:** titolo `SCHEDA DI CARICO / PIANO DI STIVA`, data e ora di generazione (aggiornate all'evento `beforeprint`), nome configurazione mezzo, lunghezza e larghezza utile, totale colli.
+  - **Corpo:** disegno vettoriale del camion (quote, tacche metriche, colli) centrato e ridimensionato per occupare l'altezza utile del foglio A4 (`preserveAspectRatio="xMidYMid meet"`).
+  - **Tabella riepilogo in calce:** Cliente/Tappa, Formato (nome catalogo + quote $W \times L$), Orientamento (`Piatto ↔` / `Punta ↕`, dedotto dalla geometria reale del collo), Q.tà; colli omogenei accorpati e riga `TOTALE COLLI`.
+- **Regole `@media print` in `src/index.css`:**
+  - `@page { size: A4 portrait; margin: 10mm }`.
+  - `#print-report` è `display: none` a schermo e in stampa diventa una colonna flex alta **277 mm** (A4 297 − 2×10 mm di margine), con `print-color-adjust: exact` per i colori pastello dei colli.
+  - `#screen-app` (ControlDeck, HUD Zoom/Pan e selettore densità) è nascosto con `display: none !important`, così su carta resta **solo** la scheda di carico.
+- **Barra comandi rapida in `ControlDeck.tsx`** (sotto il titolo TRUCK PLANNER):
+  - **`Copia Immagine`** (`id="btn-copy-image"`, icona `Copy`) → invoca `copyCanvasToClipboard`; al successo diventa `Copiato!` con icona `Check` e testo verde per 2,5 s. Se scatta il fallback mostra `PNG salvato` in ambra con icona `Download` (feedback onesto: nessuna copia reale negli appunti).
+  - **`Stampa / PDF`** (`id="btn-print-report"`, icona `Printer`) → invoca `window.print()`.
+- **Verifica headless (Chrome DevTools Protocol, zero dipendenze aggiunte):** pulsanti presenti; click su `Stampa / PDF` → `window.print()` invocato; con media `print` emulata `#screen-app`/`.control-deck`/`.canvas-hud` sono `display:none` e `#print-report` è visibile a 277 mm con titolo, dati mezzo e tabella popolata; `Page.printToPDF` genera la scheda (≈110 kB); `Copia Immagine` scrive negli appunti (`Copiato!`) e, con appunti negati, scarica `piano-di-carico.png` valido a 2400×12732 px (sforamento posteriore incluso). Nessun errore in console.
+
 ---
 
 ## 3. MAPPA ARCHITETTURALE DEI FILE
 - `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`, `LabelDensity`, `SequenceBatchItem`).
 - `src/constants.ts`: Presets veicoli, catalogo colli e definizione `CUSTOM_PALLET` (fuori sagoma).
 - `src/utils/snapping.ts`: Modulo matematico puro (`calculateSnapPosition`, `isRectColliding`, `isOutOfBounds`, `findSmartSpawnPosition`).
+- `src/utils/export.ts`: Snapshot PNG pulito del pianale (`getPianoExtent`, `buildPianoSvg`, `rasterizeSnapshotToPng`, `copyCanvasToClipboard`) con copia negli appunti e fallback download.
 - `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
-- `src/components/ControlDeck.tsx`: Plancia di comando con selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
+- `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
+- `src/components/PrintReport.tsx`: Scheda di carico A4 (`#print-report`) per stampa / salvataggio PDF.
+- `src/index.css`: Tailwind v4 + regole `@page` / `@media print` della scheda di carico.
 - `src/App.tsx`: Stato globale della stiva, della selezione multipla (`selectedItemIds`) e della densità etichette (`labelDensity`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, motore di stiva sequenziale (`handleExecuteSequence`), `handleUpdateItemsPos` / `handleUpdateItemProperties`.
 - `AGENTS.md`: File di contesto e direttive tassative per gli agent AI.
 
 ---
 
 ## 4. PROSSIMI PASSI (NEXT SPRINT ROADMAP)
-1. **Multi-Camion:** gestione contemporanea di più mezzi/rimorchi nella stessa sessione di carico.
-2. **Condivisione & Output:** Pulsanti "Copia Immagine" negli appunti (PNG) per WhatsApp/Email e "Salva PDF" report di carico.
+1. **Modulo Multi-Pianale:** gestione contemporanea di più mezzi/rimorchi nella stessa sessione di carico (finestre di stiva indipendenti, riepilogo unificato e trasferimento colli tra pianali).

@@ -1,1 +1,67 @@
 @import "tailwindcss";
+
+/* ==========================================================================
+   SPRINT D — OUTPUT: SCHEDA DI CARICO A4 / PDF
+   --------------------------------------------------------------------------
+   `#print-report` è montato nel DOM accanto all'app interattiva ma resta
+   invisibile a schermo: esiste solo su carta.
+   ========================================================================== */
+
+#print-report {
+  display: none;
+}
+
+/* Foglio A4 verticale con margini puliti. */
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
+@media print {
+  html,
+  body {
+    height: auto;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  /* 1) L'interfaccia interattiva non deve mai finire su carta:
+        ControlDeck (pannello comandi), HUD Zoom/Pan e selettore densità. */
+  #screen-app,
+  .control-deck,
+  .canvas-hud {
+    display: none !important;
+  }
+
+  /* 2) Solo la scheda di carico resta visibile, a tutta pagina A4 portrait. */
+  #print-report {
+    display: flex !important;
+    flex-direction: column;
+    gap: 3mm;
+    width: 100%;
+    /* Altezza utile: A4 297mm − 2 × 10mm di margine di pagina. */
+    height: 277mm;
+    color: #0f172a;
+    font-family: Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Il disegno assorbe tutto lo spazio residuo del foglio (centrato e scalato). */
+  #print-report .print-drawing {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #print-report .print-drawing svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* La tabella riepilogo resta compatta in calce. */
+  #print-report .print-table {
+    flex: 0 0 auto;
+  }
+}
