@@ -34,26 +34,42 @@ const LASSO_FILL_OPACITY = 0.15;
 /** Spostamento minimo (px schermo) oltre il quale un drag non è più un click. */
 const DRAG_THRESHOLD_PX = 3;
 
-/* --- Blocco corsa rotellina / pan (clamp sull'asse Y) ---------------------- */
-/** Margine (px) che il camion non può superare: una porzione resta sempre visibile. */
-const PAN_CLAMP_MARGIN_PX = 120;
+/* --- Clamp rigido intelligente del pan (asse Y) --------------------------- */
+/** Margine (px) riservato in alto alla didascalia "▲ CABINA ▲". */
+const PAN_TOP_MARGIN_PX = 40;
+/** Margine (px) riservato in basso alla didascalia "PORTE POSTERIORI". */
+const PAN_BOTTOM_MARGIN_PX = 50;
+/** Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo. */
+const PAN_LABEL_MARGIN_CM = 80;
 
 /**
- * Blocca il pan verticale perché il semirimorchio non possa essere spinto
- * completamente fuori dalla visuale:
- * - `minPanY = -(vehicle.length * zoom) + 120` → le porte posteriori non salgono
- *   oltre la parte alta dello schermo;
- * - `maxPanY = containerHeight - 120` → la cabina non scende oltre il fondo.
+ * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
+ * sopra la Cabina e sotto le Porte posteriori.
+ *
+ * - **Caso A** — il camion entra interamente nell'altezza dello schermo
+ *   (`(vehicleLength + 80) * zoom <= containerH`): il pianale resta centrato
+ *   verticalmente nel viewport e non può scivolare via.
+ * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
+ *   si arresta a ridosso del bordo alto (`maxPanY = 40`) e le Porte posteriori
+ *   a ridosso di quello basso (`minPanY = containerH - 50 - vehicleLength * zoom`).
  */
 const clampPanY = (
-  value: number,
+  panY: number,
   zoom: number,
   vehicleLength: number,
-  containerHeight: number
+  containerH: number
 ): number => {
-  const minPanY = -(vehicleLength * zoom) + PAN_CLAMP_MARGIN_PX;
-  const maxPanY = containerHeight - PAN_CLAMP_MARGIN_PX;
-  return Math.min(maxPanY, Math.max(minPanY, value));
+  const truckTotalHeightPx = (vehicleLength + PAN_LABEL_MARGIN_CM) * zoom;
+
+  // Caso A: il camion entra interamente nello schermo → pianale centrato.
+  if (truckTotalHeightPx <= containerH) {
+    return (containerH - vehicleLength * zoom) / 2;
+  }
+
+  // Caso B: il camion è più lungo dello schermo → clamp rigoroso ai due bordi.
+  const maxPanY = PAN_TOP_MARGIN_PX;
+  const minPanY = containerH - PAN_BOTTOM_MARGIN_PX - vehicleLength * zoom;
+  return Math.max(minPanY, Math.min(maxPanY, panY));
 };
 
 /**
@@ -296,7 +312,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       // Blocca SEMPRE lo scroll e lo zoom nativo della pagina: listener non passivo.
       e.preventDefault();
 
+      const containerHeight = container.getBoundingClientRect().height;
+
       // 1) Ctrl / Cmd + rotellina → Zoom fluido ancorato al cursore (stile CAD).
+      //    Una volta applicato lo zoom, il pan Y viene riallineato dal clamp
+      //    rigido: nessuno spazio vuoto compare sopra la Cabina o sotto le Porte.
       if (e.ctrlKey || e.metaKey) {
         const mouse = toSvgPoint(e.clientX, e.clientY);
         if (!mouse) return;
@@ -307,7 +327,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         setView((prev) => {
           const nextZoom = clampZoom(prev.zoom * factor, prev.fitZoom);
           if (nextZoom === prev.zoom) return prev;
-          return zoomAroundPoint(prev, nextZoom, mouse);
+          const zoomed = zoomAroundPoint(prev, nextZoom, mouse);
+          return {
+            ...zoomed,
+            pan: {
+              ...zoomed.pan,
+              y: clampPanY(zoomed.pan.y, zoomed.zoom, vehicle.length, containerHeight),
+            },
+          };
         });
         return;
       }
@@ -325,9 +352,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
       // 3) Rotellina pura → Pan verticale (Y): scorre il semirimorchio
       //    dall'alto (Cabina) verso il basso (Porte posteriori).
-      //    Il pan è clampato perché una porzione del pianale resti sempre visibile.
+      //    Clamp rigido: il pianale resta centrato se entra nello schermo,
+      //    altrimenti Cabina e Porte si arrestano a ridosso dei bordi.
       const deltaY = normalizeDelta(e.deltaY, e.deltaMode);
-      const containerHeight = container.getBoundingClientRect().height;
       setView((prev) => ({
         ...prev,
         pan: {
@@ -439,7 +466,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       ) {
         panning.moved = true;
       }
-      // Pan verticale clampato: una porzione del pianale resta sempre in vista.
+      // Pan verticale sotto clamp rigido: nessuno spazio vuoto ai due estremi.
       const panHeight = measureViewport().h;
       setView((prev) => ({
         ...prev,
@@ -557,13 +584,22 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   // --- Zoom da pulsanti HUD (ancorato al centro del viewport) ---------------
   const zoomByStep = (sign: number) => {
     const center = { x: viewport.w / 2, y: viewport.h / 2 };
+    const containerHeight = measureViewport().h;
     setView((prev) => {
       const nextZoom = clampZoom(
         prev.zoom + sign * ZOOM_STEP_RATIO * prev.fitZoom,
         prev.fitZoom
       );
       if (nextZoom === prev.zoom) return prev;
-      return zoomAroundPoint(prev, nextZoom, center);
+      const zoomed = zoomAroundPoint(prev, nextZoom, center);
+      // Riallineamento verticale: il pianale non può lasciare vuoto ai bordi.
+      return {
+        ...zoomed,
+        pan: {
+          ...zoomed.pan,
+          y: clampPanY(zoomed.pan.y, zoomed.zoom, vehicle.length, containerHeight),
+        },
+      };
     });
   };
 
@@ -896,7 +932,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               textAnchor="middle"
               className="text-[15px] font-bold fill-slate-700 tracking-wider"
             >
-              ▲ [ CABINA ] ▲
+              ▲ CABINA ▲
             </text>
 
             {/* Quota larghezza utile */}
@@ -916,7 +952,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               textAnchor="middle"
               className="text-[14px] font-bold fill-slate-700 tracking-wider"
             >
-              ▼ [ PORTE POSTERIORI ] ▼
+              PORTE POSTERIORI
             </text>
 
             {/* Rendering dei Colli Stivati — coordinate = cm reali del pianale */}

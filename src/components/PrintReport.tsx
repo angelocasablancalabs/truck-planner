@@ -239,7 +239,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
             fontWeight="bold"
             fill={COLORS.caption}
           >
-            ▲ [ CABINA ] ▲
+            ▲ CABINA ▲
           </text>
           <text
             x={vehicle.width / 2}
@@ -260,7 +260,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
             fontWeight="bold"
             fill={COLORS.caption}
           >
-            ▼ [ PORTE POSTERIORI ] ▼
+            PORTE POSTERIORI
           </text>
         </svg>
       </div>

@@ -4,8 +4,8 @@
 - **Applicazione:** `truck-planner` (Piattaforma vettoriale interattiva per la pianificazione e stiva merci 2D su semirimorchi e motrici refrigerate).
 - **Stack Tecnologico:** Vite + React 19 + TypeScript (regola rigida `import type`) + Tailwind CSS v4 + Lucide React + Motore grafico SVG Vettoriale Nativo.
 - **Sistema di Riferimento:** Coordinate cartesiane continue espresse in centimetri reali $(W, L)$.
-  - $Y = 0$ (Alto): **▲ [ CABINA ] ▲**
-  - $Y = \text{vehicle.length}$ (Basso): **▼ [ PORTE POSTERIORI ] ▼** (linea tratteggiata)
+  - $Y = 0$ (Alto): **▲ CABINA ▲**
+  - $Y = \text{vehicle.length}$ (Basso): **PORTE POSTERIORI** (linea tratteggiata)
   - $X = 0$ (Sinistra): Parete sinistra
   - $X = \text{vehicle.width}$ (Destra): Parete destra
 
@@ -140,11 +140,23 @@
 1. **Preset Standard aggiornato** (`constants.ts`): `bilico_std` → **Bilico frigo Standard (2,45 × 13,28 m)**, $W = 245\text{ cm}$, $L = 1328\text{ cm}$.
 2. **Bordi dei colli uniformi (grigio antracite):** tutti i colli di `PALLET_CATALOG` usano l'unico `borderColor` `#334155` (costante `ITEM_BORDER_COLOR`). Il rosso `#EF4444` (`ALERT_COLOR`) è **riservato unicamente** alle condizioni di allarme (`hasCollision || isOutOfBounds`) sia in `TruckCanvas.tsx` sia in `export.ts`: nessun bordo di catalogo può più essere confuso con un allarme.
 3. **Box ad accordion nella sidebar** (`ControlDeck.tsx`): i box **Sfuso** e **Formato Libero / Fuori Sagoma** sono collassabili con stati locali `isBulkOpen` / `isCustomOpen` (default `false`). Da chiusi mostrano una sola riga compatta cliccabile con freccina (`ChevronRight`), pastiglia colore, titolo e indicatore discreto (`2.0 m` / `200×150 cm`); al click la freccina diventa `ChevronDown` e compaiono i campi. La sidebar risale di oltre 150 px nei casi d'uso più frequenti.
-4. **Blocco corsa rotellina (Pan Y clamp)** (`TruckCanvas.tsx`): il pan verticale è clampato sia sull'evento `wheel` sia sul drag dello sfondo tramite `clampPanY()` — `minPanY = -(vehicle.length × zoom) + 120` (le porte posteriori non salgono oltre la parte alta dello schermo) e `maxPanY = containerHeight - 120` (la cabina non scende oltre il fondo). Una porzione significativa del pianale resta sempre nel viewport.
+4. **Blocco corsa rotellina (Pan Y clamp)** (`TruckCanvas.tsx`): il pan verticale è clampato sia sull'evento `wheel` sia sul drag dello sfondo tramite `clampPanY()` — `minPanY = -(vehicle.length × zoom) + 120` (le porte posteriori non salgono oltre la parte alta dello schermo) e `maxPanY = containerHeight - 120` (la cabina non scende oltre il fondo). Una porzione significativa del pianale resta sempre nel viewport. *(Logica storica, superata dal “Clamp Rigido Intelligente” della sezione N.)*
 5. **Testo nei colli: clip-path & a capo** (`TruckCanvas.tsx` + `utils/export.ts`): ogni collo ha un `<clipPath id="clip-<id>">` rettangolare applicato al gruppo del testo, che quindi non può fisicamente traboccare sui colli adiacenti. Se il nome contiene uno spazio ed è lungo, o se il collo è stretto (≤ 70 cm, es. CC 56,5 cm), il nome va a capo su due `<tspan>` centrate (`x={item.width/2}`, `dy="-6"` / `dy="13"`) con corpo ridotto a `text-[10px]`; la stessa logica vive in `buildPianoSvg` per l'export PNG, con gli helper condivisi in `utils/labels.ts`.
 6. **Quota 13,20 m & contatore dinamico LDM** (`TruckCanvas.tsx` + `utils/export.ts`):
    - Se `vehicle.length >= 1320`, una linea netta a $Y = 1320$ attraversa il pianale (`#94A3B8`, `strokeDasharray="6 3"`, `strokeWidth 1.5`) con la dicitura `13.20m` in `text-[10px] font-bold fill-slate-600` nel righello di sinistra.
    - `maxOccupiedY = items.reduce((max, i) => Math.max(max, i.y + i.length), 0)`: se $> 0$ viene tracciata una sottile linea guida tratteggiata `#2563EB` a $Y = maxOccupiedY$ e, nel righello di sinistra, un badge scuro ad alto contrasto (rettangolo `#1E293B` con testo bianco in grassetto `▶ X.XX m`, es. `▶ 3.60 m`). Entrambi presenti anche nello snapshot PNG esportato, con gutter sinistro del viewBox allargato automaticamente per ospitarli.
+
+### N. Clamp Rigido Intelligente (Zero Spazio Vuoto) & Pulizia Didascalie (Sprint E-bis)
+1. **`clampPanY()` riscritta in modalità “intelligente”** (`TruckCanvas.tsx`): elimina definitivamente lo spazio vuoto grigio sopra la Cabina o sotto le Porte posteriori.
+   - **Costanti:** `PAN_TOP_MARGIN_PX = 40`, `PAN_BOTTOM_MARGIN_PX = 50`, `PAN_LABEL_MARGIN_CM = 80`; ingombro verticale di riferimento `truckTotalHeightPx = (vehicle.length + 80) × zoom`.
+   - **Caso A — il camion entra interamente nello schermo** (`truckTotalHeightPx <= containerH`): `return (containerH - vehicle.length × zoom) / 2` → il pianale resta **centrato verticalmente** e non può più scivolare via (né con la rotellina né col drag).
+   - **Caso B — il camion è più lungo dello schermo** (zoom elevato): `maxPanY = 40` (la **Cabina** si arresta a ridosso del bordo alto) e `minPanY = containerH - 50 - vehicle.length × zoom` (le **Porte** si arrestano a ridosso del bordo basso), con `return Math.max(minPanY, Math.min(maxPanY, panY))`.
+   - **Punti di applicazione:** rotellina pura (pan Y), `Shift`+rotellina resta sul pan X, drag di pan dello sfondo con il mouse e — per conservare l'invariante “zero vuoto” — anche dopo ogni variazione di zoom (`Ctrl`/`Cmd`+rotellina e pulsanti `+`/`−` dell'HUD), dove il pan Y viene riallineato dal clamp subito dopo lo zoom ancorato al cursore/centro.
+2. **Pulizia delle didascalie del semirimorchio** (`TruckCanvas.tsx`, `utils/export.ts` → `buildPianoSvg`, `components/PrintReport.tsx`): in alto resta `▲ CABINA ▲` (rimosse le parentesi quadre), in basso resta `PORTE POSTERIORI` (rimosse sia le parentesi quadre sia i triangoli `▼ … ▼`). Nessun'altra modifica grafica: quote metriche, linea tratteggiata delle porte e gutter del viewBox restano invariati.
+3. **Verifica headless (Chrome DevTools Protocol, zero dipendenze aggiunte):** 17/17 controlli superati in ≈2,2 s (limite 10 s), `browser.close()` + `process.exit(0)`.
+   - Zoom 100% (default `bilico_cc` 250 × 1328 cm, viewport 1060 × 813 px): HUD `100%`, `pan.y = 60.00` esattamente `(containerH − L×zoom)/2`, spazio grigio simmetrico sopra/sotto (60 px / 60 px); cinque rotelline verso l'alto **non** spostano il pianale (resta centrato).
+   - Zoom 240% (7 click su `+`): HUD `240%`, `(L+80)×zoom = 1763 > 813` → Caso B attivo; rotellina **e** drag del mouse verso il basso bloccano `pan.y` a **40.00** (margine Cabina); rotellina **e** drag verso l'alto bloccano `pan.y` a **−900.20** = `containerH − 50 − L×zoom` (margine Porte).
+   - Reset/Adatta a schermo → `pan.y = 60.00` (di nuovo centrato). Didascalie presenti e prive di parentesi su canvas, scheda A4 `#print-report` e SVG esportato da `buildPianoSvg`. Nessun errore in console.
 
 ---
 
@@ -154,7 +166,7 @@
 - `src/utils/snapping.ts`: Modulo matematico puro (`calculateSnapPosition`, `isRectColliding`, `isOutOfBounds`, `findSmartSpawnPosition`).
 - `src/utils/labels.ts`: Geometria condivisa delle etichette dei colli (`shouldWrapLabel`, `splitLabelIntoTwoLines`, `clipIdForItem`, corpi font in cm), usata sia dal canvas a schermo sia dall'export PNG.
 - `src/utils/export.ts`: Snapshot PNG pulito del pianale (`getPianoExtent`, `buildPianoSvg`, `rasterizeSnapshotToPng`, `copyCanvasToClipboard`) con copia negli appunti e fallback download.
-- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina con clamp verticale anti-uscita, quota nominale 13,20 m e badge LDM dinamico, etichette con `clipPath` e a capo automatico, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
+- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina con **clamp rigido intelligente** del pan Y (centratura automatica se il mezzo entra nello schermo, altrimenti blocco Cabina/Porte ai margini 40/50 px), didascalie `▲ CABINA ▲` e `PORTE POSTERIORI`, quota nominale 13,20 m e badge LDM dinamico, etichette con `clipPath` e a capo automatico, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
 - `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box ad accordion Sfuso e Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
 - `src/components/PrintReport.tsx`: Scheda di carico A4 (`#print-report`) per stampa / salvataggio PDF.
 - `src/index.css`: Tailwind v4 + regole `@page` / `@media print` della scheda di carico.

@@ -384,9 +384,9 @@ export const buildPianoSvg = (
 
   // Intestazioni e quote.
   parts.push(
-    `<text x="${vehicle.width / 2}" y="${round(extent.minY + FONT.caption * 1.05)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ [ CABINA ] ▲</text>`,
+    `<text x="${vehicle.width / 2}" y="${round(extent.minY + FONT.caption * 1.05)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ CABINA ▲</text>`,
     `<text x="${vehicle.width / 2}" y="${round(-FONT.quota * 0.4)}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.quota}" fill="${COLORS.gridText}">${vehicle.width} cm</text>`,
-    `<text x="${vehicle.width / 2}" y="${round(extent.doorLabelY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption * 0.93}" font-weight="bold" fill="${COLORS.caption}">▼ [ PORTE POSTERIORI ] ▼</text>`
+    `<text x="${vehicle.width / 2}" y="${round(extent.doorLabelY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption * 0.93}" font-weight="bold" fill="${COLORS.caption}">PORTE POSTERIORI</text>`
   );
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${EXPORT_BASE_WIDTH}" height="${height}" viewBox="${extent.minX} ${extent.minY} ${round(
