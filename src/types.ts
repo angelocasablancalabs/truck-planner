@@ -30,6 +30,17 @@ export interface PlacedItem {
   label?: string;
 }
 
+/**
+ * Aggiornamento di posizione di un collo (cm reali del pianale).
+ * Usato sia dal drag singolo sia dal drag di gruppo, che invia più update
+ * nello stesso frame per mantenere le posizioni relative del gruppo.
+ */
+export interface ItemPositionUpdate {
+  id: string;
+  x: number;
+  y: number;
+}
+
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */
 export interface AddItemOptions {
   /** Larghezza imposta in cm (es. 100 per Punta, 120 per Piatto). */
@@ -38,4 +49,6 @@ export interface AddItemOptions {
   length?: number;
   /** Rotazione iniziale in gradi: 0 = Punta (lato corto verso le porte), 90 = Piatto. */
   rotation?: number;
+  /** Nome / cliente personalizzato (usato dai colli "Formato Libero / Fuori Sagoma"). */
+  name?: string;
 }

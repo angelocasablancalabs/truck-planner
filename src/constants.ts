@@ -66,3 +66,18 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     isBulk: true,
   },
 ];
+
+/**
+ * Collo `CUSTOM` — Formato Libero / Fuori Sagoma.
+ * Non compare nel catalogo a righe dense: viene istanziato dal pannello
+ * dedicato con dimensioni arbitrarie (W × L) e nome/cliente personalizzato.
+ */
+export const CUSTOM_PALLET: PalletDefinition = {
+  code: 'CUSTOM',
+  name: 'Collo Custom',
+  width: 200,
+  length: 150,
+  color: '#CBD5E1', // Grigio neutro di base
+  borderColor: '#475569',
+  rotatable: true,
+};

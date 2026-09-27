@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { VehicleConfig, PlacedItem, PalletDefinition, AddItemOptions } from './types';
+import type {
+  VehicleConfig,
+  PlacedItem,
+  PalletDefinition,
+  AddItemOptions,
+  ItemPositionUpdate,
+} from './types';
 import { VEHICLE_PRESETS } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
@@ -16,7 +22,13 @@ const ROTATION_SNAP_THRESHOLD = 10;
 export default function App() {
   const [vehicle, setVehicle] = useState<VehicleConfig>(VEHICLE_PRESETS[0]); // Default CC Olandese
   const [items, setItems] = useState<PlacedItem[]>([]);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  // Selezione multipla: lista ordinata di ID selezionati ([] = nessuna selezione).
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+
+  /** Imposta l'intera lista di selezione (sostituzione, non toggle). */
+  const handleSelectItems = useCallback((ids: string[]) => {
+    setSelectedItemIds(ids);
+  }, []);
 
   // Aggiungi un nuovo collo al pianale, nel primo slot libero disponibile
   const handleAddItem = (pallet: PalletDefinition, options: AddItemOptions = {}) => {
@@ -29,7 +41,7 @@ export default function App() {
     const newItem: PlacedItem = {
       id: `${pallet.code}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       code: pallet.code,
-      name: pallet.name,
+      name: options.name ?? pallet.name,
       width,
       length,
       x: spawn.x,
@@ -40,22 +52,59 @@ export default function App() {
     };
 
     setItems((prev) => [...prev, newItem]);
-    setSelectedItemId(newItem.id);
+    setSelectedItemIds([newItem.id]);
   };
 
-  // Aggiornamento coordinate X, Y
-  const handleUpdateItemPos = (id: string, x: number, y: number) => {
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, x, y } : item))
-    );
-  };
+  /**
+   * Aggiornamento simultaneo delle coordinate di più colli (drag singolo e di
+   * gruppo): un solo setState per frame, con patch applicata per ID.
+   */
+  const handleUpdateItemsPos = useCallback((updates: ItemPositionUpdate[]) => {
+    if (updates.length === 0) return;
 
-  // Rotazione di 90 gradi ancorata al baricentro, con riallineamento magnetico
+    setItems((prev) => {
+      const byId = new Map(updates.map((u) => [u.id, u]));
+      let changed = false;
+
+      const next = prev.map((item) => {
+        const update = byId.get(item.id);
+        if (!update) return item;
+        if (update.x === item.x && update.y === item.y) return item;
+        changed = true;
+        return { ...item, x: update.x, y: update.y };
+      });
+
+      // Nessuna variazione reale: nessun nuovo riferimento, nessun render.
+      return changed ? next : prev;
+    });
+  }, []);
+
+  /**
+   * Aggiornamento proprietà (Nome/Cliente, palette colori, ...) su uno o più
+   * colli: accetta un singolo ID oppure l'array completo della selezione.
+   */
+  const handleUpdateItemProperties = useCallback(
+    (target: string | string[], updates: Partial<PlacedItem>) => {
+      const ids = Array.isArray(target) ? target : [target];
+      if (ids.length === 0) return;
+
+      const idSet = new Set(ids);
+      setItems((prev) =>
+        prev.map((item) => (idSet.has(item.id) ? { ...item, ...updates } : item))
+      );
+    },
+    []
+  );
+
+  // Rotazione di 90 gradi ancorata al baricentro, con riallineamento magnetico.
+  // Opera su tutti i colli selezionati (batch), ciascuno sul proprio baricentro.
   const handleRotateSelected = useCallback(() => {
-    if (!selectedItemId) return;
+    if (selectedItemIds.length === 0) return;
+    const idSet = new Set(selectedItemIds);
+
     setItems((prev) =>
       prev.map((item) => {
-        if (item.id !== selectedItemId) return item;
+        if (!idSet.has(item.id)) return item;
 
         // Il collo fa perno sul proprio centro geometrico: inverte i lati
         // mantenendo il baricentro, poi rientra nelle pareti del mezzo.
@@ -99,14 +148,15 @@ export default function App() {
         };
       })
     );
-  }, [selectedItemId, vehicle]);
+  }, [selectedItemIds, vehicle]);
 
-  // Cancellazione dell'elemento selezionato
+  // Cancellazione di TUTTI i colli selezionati (batch) + svuotamento selezione.
   const handleDeleteSelected = useCallback(() => {
-    if (!selectedItemId) return;
-    setItems((prev) => prev.filter((item) => item.id !== selectedItemId));
-    setSelectedItemId(null);
-  }, [selectedItemId]);
+    if (selectedItemIds.length === 0) return;
+    const idSet = new Set(selectedItemIds);
+    setItems((prev) => prev.filter((item) => !idSet.has(item.id)));
+    setSelectedItemIds([]);
+  }, [selectedItemIds]);
 
   // Gestione scorciatoie da tastiera (Spazio e Canc)
   useEffect(() => {
@@ -128,7 +178,10 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleRotateSelected, handleDeleteSelected]);
 
-  const selectedItem = items.find((i) => i.id === selectedItemId) || null;
+  // Lista dei colli selezionati, nell'ordine di selezione.
+  const selectedItems = selectedItemIds
+    .map((id) => items.find((item) => item.id === id))
+    .filter((item): item is PlacedItem => item !== undefined);
 
   return (
     <div className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans">
@@ -137,9 +190,9 @@ export default function App() {
         <TruckCanvas
           vehicle={vehicle}
           items={items}
-          selectedItemId={selectedItemId}
-          onSelectItem={setSelectedItemId}
-          onUpdateItemPos={handleUpdateItemPos}
+          selectedItemIds={selectedItemIds}
+          onSelectItems={handleSelectItems}
+          onUpdateItemsPos={handleUpdateItemsPos}
         />
       </div>
 
@@ -151,11 +204,12 @@ export default function App() {
           onAddItem={handleAddItem}
           onRotateSelected={handleRotateSelected}
           onDeleteSelected={handleDeleteSelected}
+          onUpdateItemProperties={handleUpdateItemProperties}
           onClearAll={() => {
             setItems([]);
-            setSelectedItemId(null);
+            setSelectedItemIds([]);
           }}
-          selectedItem={selectedItem}
+          selectedItems={selectedItems}
           items={items}
         />
       </div>
