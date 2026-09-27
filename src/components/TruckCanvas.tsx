@@ -9,9 +9,22 @@ import {
   toPrecision,
   REAR_OVERHANG_LIMIT,
 } from '../utils/snapping';
-
-/** Colore d'avviso per i colli in sovrapposizione (fuori sagoma). */
-const COLLISION_COLOR = '#EF4444';
+import {
+  ALERT_COLOR,
+  LDM_BADGE,
+  LDM_BADGE_CENTER_X,
+  LDM_BADGE_COLOR,
+  LDM_BADGE_LEFT_X,
+  LDM_GUIDE_COLOR,
+  NOMINAL_QUOTA_CM,
+  NOMINAL_QUOTA_COLOR,
+} from '../constants';
+import {
+  clipIdForItem,
+  NARROW_ITEM_WIDTH_CM,
+  shouldWrapLabel,
+  splitLabelIntoTwoLines,
+} from '../utils/labels';
 
 /** Colori del rettangolo di selezione (lasso) e della selezione attiva. */
 const SELECTION_COLOR = '#2563EB';
@@ -20,6 +33,28 @@ const LASSO_FILL_OPACITY = 0.15;
 
 /** Spostamento minimo (px schermo) oltre il quale un drag non è più un click. */
 const DRAG_THRESHOLD_PX = 3;
+
+/* --- Blocco corsa rotellina / pan (clamp sull'asse Y) ---------------------- */
+/** Margine (px) che il camion non può superare: una porzione resta sempre visibile. */
+const PAN_CLAMP_MARGIN_PX = 120;
+
+/**
+ * Blocca il pan verticale perché il semirimorchio non possa essere spinto
+ * completamente fuori dalla visuale:
+ * - `minPanY = -(vehicle.length * zoom) + 120` → le porte posteriori non salgono
+ *   oltre la parte alta dello schermo;
+ * - `maxPanY = containerHeight - 120` → la cabina non scende oltre il fondo.
+ */
+const clampPanY = (
+  value: number,
+  zoom: number,
+  vehicleLength: number,
+  containerHeight: number
+): number => {
+  const minPanY = -(vehicleLength * zoom) + PAN_CLAMP_MARGIN_PX;
+  const maxPanY = containerHeight - PAN_CLAMP_MARGIN_PX;
+  return Math.min(maxPanY, Math.max(minPanY, value));
+};
 
 /**
  * Opzioni del selettore di densità etichette nell'HUD (basso a sinistra).
@@ -180,6 +215,13 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     meterMarkers.push(y);
   }
 
+  // Quota nominale 13,20 m: tracciata solo sui mezzi che la raggiungono.
+  const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
+
+  // Contatore dinamico LDM (metri lineari occupati): Y massima dei colli stivati.
+  const maxOccupiedY = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  const hasLdmBadge = maxOccupiedY > 0;
+
   // --- Misura del viewport --------------------------------------------------
   useEffect(() => {
     const el = containerRef.current;
@@ -283,16 +325,21 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
       // 3) Rotellina pura → Pan verticale (Y): scorre il semirimorchio
       //    dall'alto (Cabina) verso il basso (Porte posteriori).
+      //    Il pan è clampato perché una porzione del pianale resti sempre visibile.
       const deltaY = normalizeDelta(e.deltaY, e.deltaMode);
+      const containerHeight = container.getBoundingClientRect().height;
       setView((prev) => ({
         ...prev,
-        pan: { ...prev.pan, y: prev.pan.y - deltaY },
+        pan: {
+          ...prev.pan,
+          y: clampPanY(prev.pan.y - deltaY, prev.zoom, vehicle.length, containerHeight),
+        },
       }));
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, []);
+  }, [vehicle.length]);
 
   // --- Sfondo: Pan (drag semplice) oppure Lasso (Shift + drag) --------------
   const handleBackgroundPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -392,11 +439,18 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       ) {
         panning.moved = true;
       }
+      // Pan verticale clampato: una porzione del pianale resta sempre in vista.
+      const panHeight = measureViewport().h;
       setView((prev) => ({
         ...prev,
         pan: {
           x: panning.pan.x + (current.x - panning.start.x),
-          y: panning.pan.y + (current.y - panning.start.y),
+          y: clampPanY(
+            panning.pan.y + (current.y - panning.start.y),
+            prev.zoom,
+            vehicle.length,
+            panHeight
+          ),
         },
       }));
       return;
@@ -532,6 +586,126 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         }
       : null;
 
+  /**
+   * Etichette interne di un collo.
+   *
+   * - `minimal` non stampa alcun `<text>` (solo blocco colorato).
+   * - Sui colli stretti (≤ 70 cm, es. CC da 56,5 cm) o con nomi troppo lunghi il
+   *   nome va a capo su due righe centrate (`<tspan>`), con corpo ridotto a
+   *   10 px per la massima leggibilità.
+   * - Il testo è sempre racchiuso nel `clipPath` del collo: nessun traboccamento.
+   */
+  const renderItemLabels = (item: PlacedItem): React.ReactNode => {
+    if (labelDensity === 'minimal') return null;
+
+    const centerX = item.width / 2;
+    const centerY = item.length / 2;
+    const isNarrow = item.width <= NARROW_ITEM_WIDTH_CM;
+    const lines = shouldWrapLabel(item.name, item.width)
+      ? splitLabelIntoTwoLines(item.name)
+      : null;
+
+    // Corpi font allineati alle costanti di `utils/labels.ts` (unità = cm).
+    const baseClass = 'pointer-events-none select-none';
+    const nameFontClass = lines ? 'text-[10px]' : 'text-[11px]';
+    const dimensionFontClass = isNarrow ? 'text-[10px]' : 'text-[9px]';
+
+    if (labelDensity === 'client') {
+      if (lines) {
+        return (
+          <text
+            x={centerX}
+            y={centerY}
+            textAnchor="middle"
+            className={`text-[10px] font-bold fill-slate-800 ${baseClass}`}
+          >
+            <tspan x={centerX} dy="-6">
+              {lines[0]}
+            </tspan>
+            <tspan x={centerX} dy="13">
+              {lines[1]}
+            </tspan>
+          </text>
+        );
+      }
+
+      return (
+        <text
+          x={centerX}
+          y={centerY}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className={`text-[12px] font-bold fill-slate-800 ${baseClass}`}
+        >
+          {item.name}
+        </text>
+      );
+    }
+
+    if (labelDensity === 'dimensions') {
+      return (
+        <text
+          x={centerX}
+          y={centerY}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className={`${isNarrow ? 'text-[10px]' : 'text-[12px]'} font-mono font-bold fill-slate-700 ${baseClass}`}
+        >
+          {item.width}×{item.length}
+        </text>
+      );
+    }
+
+    // Densità `all`: nome (su una o due righe) + quote.
+    if (lines) {
+      return (
+        <text
+          x={centerX}
+          y={centerY}
+          textAnchor="middle"
+          className={`text-[10px] font-bold fill-slate-800 ${baseClass}`}
+        >
+          <tspan x={centerX} dy="-6">
+            {lines[0]}
+          </tspan>
+          <tspan x={centerX} dy="13">
+            {lines[1]}
+          </tspan>
+          <tspan
+            x={centerX}
+            dy="12"
+            className={`${dimensionFontClass} font-mono font-normal fill-slate-600`}
+          >
+            {item.width}×{item.length}
+          </tspan>
+        </text>
+      );
+    }
+
+    return (
+      <>
+        <text
+          x={centerX}
+          y={centerY - 3}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className={`${nameFontClass} font-bold fill-slate-800 ${baseClass}`}
+        >
+          {item.name}
+        </text>
+        <text
+          x={centerX}
+          y={centerY + 11}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className={`${dimensionFontClass} font-mono fill-slate-600 ${baseClass}`}
+        >
+          {item.width}×{item.length}
+        </text>
+      </>
+    );
+  };
+
   return (
     <div className="relative w-full h-full overflow-hidden bg-slate-100 select-none">
       <div
@@ -568,6 +742,13 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                 floodOpacity="0.18"
               />
             </filter>
+            {/* Un clipPath per ogni collo: il testo resta fisicamente dentro il
+                proprio rettangolo e non può sbordare sui colli adiacenti. */}
+            {items.map((item) => (
+              <clipPath key={item.id} id={clipIdForItem(item.id)}>
+                <rect width={item.width} height={item.length} />
+              </clipPath>
+            ))}
           </defs>
 
           {/* MONDO VETTORIALE: origine (0,0) = angolo alto-sinistra del pianale
@@ -641,6 +822,62 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               </g>
             ))}
 
+            {/* Quota nominale 13,20 m: linea netta attraverso il pianale + dicitura
+                nel righello di sinistra. Presente solo sui mezzi da 13,20 m in su. */}
+            {showsNominalQuota && (
+              <g>
+                <line
+                  x1={0}
+                  y1={NOMINAL_QUOTA_CM}
+                  x2={vehicle.width}
+                  y2={NOMINAL_QUOTA_CM}
+                  stroke={NOMINAL_QUOTA_COLOR}
+                  strokeDasharray="6 3"
+                  strokeWidth="1.5"
+                />
+                <text
+                  x={-8}
+                  y={NOMINAL_QUOTA_CM + 4}
+                  textAnchor="end"
+                  className="text-[10px] font-bold fill-slate-600 font-mono"
+                >
+                  13.20m
+                </text>
+              </g>
+            )}
+
+            {/* Contatore dinamico LDM: linea guida alla Y massima occupata e badge
+                scuro ad alto contrasto nel righello di sinistra. */}
+            {hasLdmBadge && (
+              <g>
+                <line
+                  x1={0}
+                  y1={maxOccupiedY}
+                  x2={vehicle.width}
+                  y2={maxOccupiedY}
+                  stroke={LDM_GUIDE_COLOR}
+                  strokeWidth="1"
+                  strokeDasharray="6 4"
+                />
+                <rect
+                  x={LDM_BADGE_LEFT_X}
+                  y={maxOccupiedY - LDM_BADGE.height / 2}
+                  width={LDM_BADGE.width}
+                  height={LDM_BADGE.height}
+                  rx={3}
+                  fill={LDM_BADGE_COLOR}
+                />
+                <text
+                  x={LDM_BADGE_CENTER_X}
+                  y={maxOccupiedY + 3.5}
+                  textAnchor="middle"
+                  className="text-[10px] font-bold fill-white"
+                >
+                  ▶ {(maxOccupiedY / 100).toFixed(2)} m
+                </text>
+              </g>
+            )}
+
             {/* Parete posteriore / PORTE */}
             <line
               x1={0}
@@ -690,8 +927,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               const alert = hasCollision(item, items) || isOutOfBounds(item, vehicle);
 
               // Priorità: allarme (rosso) > selezione (blu) > bordo del collo.
+              // Il ROSSO è riservato alle sole condizioni di allarme: il bordo di
+              // catalogo è sempre il grigio antracite uniforme.
               // Doppio contorno quando coesistono, così i due stati restano distinguibili.
-              const outerStroke = alert ? COLLISION_COLOR : isSelected ? SELECTION_COLOR : item.borderColor;
+              const outerStroke = alert
+                ? ALERT_COLOR
+                : isSelected
+                  ? SELECTION_COLOR
+                  : item.borderColor;
               const outerStrokeWidth = alert ? 2 : isSelected ? 3 : 1.5;
 
               return (
@@ -725,53 +968,12 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                     />
                   )}
                   {/* Etichette interne: dipendono dalla densità scelta nell'HUD.
-                      `minimal` non stampa alcun <text> (solo blocco colorato). */}
-                  {labelDensity === 'all' && (
-                    <>
-                      <text
-                        x={item.width / 2}
-                        y={item.length / 2 - 3}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        className="text-[11px] font-bold fill-slate-800 pointer-events-none select-none"
-                      >
-                        {item.name}
-                      </text>
-                      <text
-                        x={item.width / 2}
-                        y={item.length / 2 + 11}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        className="text-[9px] font-mono fill-slate-600 pointer-events-none select-none"
-                      >
-                        {item.width}×{item.length}
-                      </text>
-                    </>
-                  )}
-
-                  {labelDensity === 'client' && (
-                    <text
-                      x={item.width / 2}
-                      y={item.length / 2}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      className="text-[12px] font-bold fill-slate-800 pointer-events-none select-none"
-                    >
-                      {item.name}
-                    </text>
-                  )}
-
-                  {labelDensity === 'dimensions' && (
-                    <text
-                      x={item.width / 2}
-                      y={item.length / 2}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      className="text-[12px] font-mono font-bold fill-slate-700 pointer-events-none select-none"
-                    >
-                      {item.width}×{item.length}
-                    </text>
-                  )}
+                      `minimal` non stampa alcun <text> (solo blocco colorato).
+                      Il gruppo è ritagliato dal clipPath del collo: il testo non
+                      può fisicamente sbordare sui colli adiacenti. */}
+                  <g clipPath={`url(#${clipIdForItem(item.id)})`}>
+                    {renderItemLabels(item)}
+                  </g>
                 </g>
               );
             })}

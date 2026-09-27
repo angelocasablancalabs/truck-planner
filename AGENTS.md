@@ -28,7 +28,7 @@ Sostituisce definitivamente i vecchi layout Excel a celle unite, operando su un 
 
 ### Preset Veicoli Principali
 1. `bilico_cc`: Bilico CC / Olandese — Larghezza **250 cm** × Lunghezza **1328 cm** (13,28 m).
-2. `bilico_std`: Bilico Frigo Standard — Larghezza **246 cm** × Lunghezza **1360 cm** (13,60 m).
+2. `bilico_std`: Bilico Frigo Standard — Larghezza **245 cm** × Lunghezza **1328 cm** (13,28 m).
 3. `motrice_3a`: Motrice 3 Assi — Larghezza **250 cm** × Lunghezza **760 cm** (7,60 m).
 4. `custom`: Dimensioni libere fornite dall'utente.
 

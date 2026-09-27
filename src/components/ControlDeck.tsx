@@ -17,6 +17,8 @@ import {
   Info,
   ArrowUpDown,
   ArrowLeftRight,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Check,
   Printer,
@@ -115,6 +117,11 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   const [customName, setCustomName] = useState<string>('Collo Custom');
   const [customWidth, setCustomWidth] = useState<number>(200);
   const [customLength, setCustomLength] = useState<number>(150);
+
+  // --- Box ad accordion (risparmio verticale della sidebar) ----------------
+  // Chiusi di default: mostrano solo la riga compatta cliccabile con freccina.
+  const [isBulkOpen, setIsBulkOpen] = useState<boolean>(false);
+  const [isCustomOpen, setIsCustomOpen] = useState<boolean>(false);
 
   // --- Condivisione & Output (Sprint D) -----------------------------------
   // Esito dell'ultima esportazione: alimenta il feedback temporaneo del pulsante.
@@ -503,10 +510,23 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           })}
         </div>
 
-        {/* Blocco Collo Sfuso */}
-        <div className="bg-white border border-slate-200 rounded p-2.5 space-y-2">
-          <div className="flex items-center justify-between gap-2">
+        {/* Blocco Collo Sfuso — box ad accordion (chiuso di default) */}
+        <div className="bg-white border border-slate-200 rounded overflow-hidden">
+          <button
+            type="button"
+            id="toggle-bulk-box"
+            onClick={() => setIsBulkOpen((prev) => !prev)}
+            aria-expanded={isBulkOpen}
+            aria-controls="bulk-box-fields"
+            title={isBulkOpen ? 'Comprimi il box Sfuso' : 'Espandi il box Sfuso'}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left transition hover:bg-slate-50"
+          >
             <span className="flex items-center gap-1.5 min-w-0">
+              {isBulkOpen ? (
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              )}
               <span
                 className="w-3 h-3 rounded-sm border shrink-0"
                 style={{
@@ -518,35 +538,61 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                 Sfuso (Metri Lineari)
               </span>
             </span>
-            <span className="text-[10px] font-mono text-slate-500 shrink-0">
-              W: {vehicle.width} cm
+            <span className="text-[10px] font-mono text-slate-400 shrink-0 tabular-nums">
+              {bulkLength.toFixed(1)} m
             </span>
-          </div>
-          <div className="flex gap-2">
-            <input
-              type="number"
-              step="0.1"
-              min="0.5"
-              max="13.6"
-              value={bulkLength}
-              onChange={(e) => setBulkLength(parseFloat(e.target.value) || 1)}
-              className="w-24 bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <button
-              onClick={() => {
-                if (bulkPallet) onAddItem(bulkPallet, { length: bulkLength * 100 });
-              }}
-              className="flex-1 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 text-slate-700 text-xs font-semibold py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition"
+          </button>
+
+          {isBulkOpen && (
+            <div
+              id="bulk-box-fields"
+              className="px-2.5 pb-2.5 pt-2 space-y-2 border-t border-slate-100"
             >
-              <Plus className="w-3.5 h-3.5 text-slate-500" /> Aggiungi Sfuso
-            </button>
-          </div>
+              <div className="flex items-center justify-end">
+                <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                  W: {vehicle.width} cm
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.5"
+                  max="13.6"
+                  value={bulkLength}
+                  onChange={(e) => setBulkLength(parseFloat(e.target.value) || 1)}
+                  className="w-24 bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <button
+                  onClick={() => {
+                    if (bulkPallet) onAddItem(bulkPallet, { length: bulkLength * 100 });
+                  }}
+                  className="flex-1 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-400 text-slate-700 text-xs font-semibold py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition"
+                >
+                  <Plus className="w-3.5 h-3.5 text-slate-500" /> Aggiungi Sfuso
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Blocco Formato Libero / Fuori Sagoma */}
-        <div className="bg-white border border-slate-200 rounded p-2.5 space-y-2">
-          <div className="flex items-center justify-between gap-2">
+        {/* Blocco Formato Libero / Fuori Sagoma — box ad accordion (chiuso di default) */}
+        <div className="bg-white border border-slate-200 rounded overflow-hidden">
+          <button
+            type="button"
+            id="toggle-custom-box"
+            onClick={() => setIsCustomOpen((prev) => !prev)}
+            aria-expanded={isCustomOpen}
+            aria-controls="custom-box-fields"
+            title={isCustomOpen ? 'Comprimi il box Formato Libero' : 'Espandi il box Formato Libero'}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left transition hover:bg-slate-50"
+          >
             <span className="flex items-center gap-1.5 min-w-0">
+              {isCustomOpen ? (
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              )}
               <span
                 className="w-3 h-3 rounded-sm border shrink-0"
                 style={{
@@ -558,60 +604,70 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                 Formato Libero / Fuori Sagoma
               </span>
             </span>
-          </div>
-
-          <label className="block space-y-1">
-            <span className="block text-[10px] font-bold text-slate-500 uppercase">
-              Nome / Cliente
+            <span className="text-[10px] font-mono text-slate-400 shrink-0 tabular-nums">
+              {customWidth}×{customLength} cm
             </span>
-            <input
-              type="text"
-              value={customName}
-              onChange={(e) => setCustomName(e.target.value)}
-              placeholder="Es. Macchinario"
-              className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </label>
-
-          <div className="flex gap-2">
-            <label className="flex-1 space-y-1">
-              <span className="block text-[10px] font-bold text-slate-500 uppercase">
-                Larghezza (W cm)
-              </span>
-              <input
-                type="number"
-                min={CUSTOM_MIN_WIDTH}
-                max={CUSTOM_MAX_WIDTH}
-                step={1}
-                value={customWidth}
-                onChange={(e) => setCustomWidth(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
-
-            <label className="flex-1 space-y-1">
-              <span className="block text-[10px] font-bold text-slate-500 uppercase">
-                Lunghezza (L cm)
-              </span>
-              <input
-                type="number"
-                min={CUSTOM_MIN_LENGTH}
-                max={CUSTOM_MAX_LENGTH}
-                step={1}
-                value={customLength}
-                onChange={(e) => setCustomLength(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleAddCustom}
-            className="w-full bg-slate-50 border border-slate-200 hover:bg-blue-50 hover:border-blue-400 text-slate-700 text-xs font-semibold py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition"
-          >
-            <Plus className="w-3.5 h-3.5 text-slate-500" /> Aggiungi Fuori Sagoma
           </button>
+
+          {isCustomOpen && (
+            <div
+              id="custom-box-fields"
+              className="px-2.5 pb-2.5 pt-2 space-y-2 border-t border-slate-100"
+            >
+              <label className="block space-y-1">
+                <span className="block text-[10px] font-bold text-slate-500 uppercase">
+                  Nome / Cliente
+                </span>
+                <input
+                  type="text"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="Es. Macchinario"
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </label>
+
+              <div className="flex gap-2">
+                <label className="flex-1 space-y-1">
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase">
+                    Larghezza (W cm)
+                  </span>
+                  <input
+                    type="number"
+                    min={CUSTOM_MIN_WIDTH}
+                    max={CUSTOM_MAX_WIDTH}
+                    step={1}
+                    value={customWidth}
+                    onChange={(e) => setCustomWidth(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </label>
+
+                <label className="flex-1 space-y-1">
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase">
+                    Lunghezza (L cm)
+                  </span>
+                  <input
+                    type="number"
+                    min={CUSTOM_MIN_LENGTH}
+                    max={CUSTOM_MAX_LENGTH}
+                    step={1}
+                    value={customLength}
+                    onChange={(e) => setCustomLength(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </label>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddCustom}
+                className="w-full bg-slate-50 border border-slate-200 hover:bg-blue-50 hover:border-blue-400 text-slate-700 text-xs font-semibold py-1.5 px-3 rounded flex items-center justify-center gap-1.5 transition"
+              >
+                <Plus className="w-3.5 h-3.5 text-slate-500" /> Aggiungi Fuori Sagoma
+              </button>
+            </div>
+          )}
         </div>
       </div>
       )}

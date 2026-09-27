@@ -26,7 +26,7 @@
 ### B. Configurazione Mezzo Adattiva
 - **Preset Ufficiali:**
   - `bilico_cc`: **Bilico frigo Fiori** ($2{,}50 \times 13{,}28\text{ m}$)
-  - `bilico_std`: **Bilico frigo Standard** ($2{,}46 \times 13{,}60\text{ m}$)
+  - `bilico_std`: **Bilico frigo Standard** ($2{,}45 \times 13{,}28\text{ m}$)
   - `motrice_3a`: **Motrice 3 Assi** ($2{,}50 \times 7{,}60\text{ m}$)
   - `custom`: **Personalizzato...**
 - **Logica Adattiva:** Quando è selezionato un preset standard la barra è pulita; solo se si seleziona `Personalizzato...` compaiono due campi numerici compatti (Larghezza e Lunghezza in cm) che aggiornano il pianale e la vista in tempo reale.
@@ -136,15 +136,26 @@
   - **`Stampa / PDF`** (`id="btn-print-report"`, icona `Printer`) → invoca `window.print()`.
 - **Verifica headless (Chrome DevTools Protocol, zero dipendenze aggiunte):** pulsanti presenti; click su `Stampa / PDF` → `window.print()` invocato; con media `print` emulata `#screen-app`/`.control-deck`/`.canvas-hud` sono `display:none` e `#print-report` è visibile a 277 mm con titolo, dati mezzo e tabella popolata; `Page.printToPDF` genera la scheda (≈110 kB); `Copia Immagine` scrive negli appunti (`Copiato!`) e, con appunti negati, scarica `piano-di-carico.png` valido a 2400×12732 px (sforamento posteriore incluso). Nessun errore in console.
 
+### M. Super Fine-Tuning — Accordion, Pan Clamp, Bordi Antracite, Quota 13,20 m & Contatore LDM (Sprint E)
+1. **Preset Standard aggiornato** (`constants.ts`): `bilico_std` → **Bilico frigo Standard (2,45 × 13,28 m)**, $W = 245\text{ cm}$, $L = 1328\text{ cm}$.
+2. **Bordi dei colli uniformi (grigio antracite):** tutti i colli di `PALLET_CATALOG` usano l'unico `borderColor` `#334155` (costante `ITEM_BORDER_COLOR`). Il rosso `#EF4444` (`ALERT_COLOR`) è **riservato unicamente** alle condizioni di allarme (`hasCollision || isOutOfBounds`) sia in `TruckCanvas.tsx` sia in `export.ts`: nessun bordo di catalogo può più essere confuso con un allarme.
+3. **Box ad accordion nella sidebar** (`ControlDeck.tsx`): i box **Sfuso** e **Formato Libero / Fuori Sagoma** sono collassabili con stati locali `isBulkOpen` / `isCustomOpen` (default `false`). Da chiusi mostrano una sola riga compatta cliccabile con freccina (`ChevronRight`), pastiglia colore, titolo e indicatore discreto (`2.0 m` / `200×150 cm`); al click la freccina diventa `ChevronDown` e compaiono i campi. La sidebar risale di oltre 150 px nei casi d'uso più frequenti.
+4. **Blocco corsa rotellina (Pan Y clamp)** (`TruckCanvas.tsx`): il pan verticale è clampato sia sull'evento `wheel` sia sul drag dello sfondo tramite `clampPanY()` — `minPanY = -(vehicle.length × zoom) + 120` (le porte posteriori non salgono oltre la parte alta dello schermo) e `maxPanY = containerHeight - 120` (la cabina non scende oltre il fondo). Una porzione significativa del pianale resta sempre nel viewport.
+5. **Testo nei colli: clip-path & a capo** (`TruckCanvas.tsx` + `utils/export.ts`): ogni collo ha un `<clipPath id="clip-<id>">` rettangolare applicato al gruppo del testo, che quindi non può fisicamente traboccare sui colli adiacenti. Se il nome contiene uno spazio ed è lungo, o se il collo è stretto (≤ 70 cm, es. CC 56,5 cm), il nome va a capo su due `<tspan>` centrate (`x={item.width/2}`, `dy="-6"` / `dy="13"`) con corpo ridotto a `text-[10px]`; la stessa logica vive in `buildPianoSvg` per l'export PNG, con gli helper condivisi in `utils/labels.ts`.
+6. **Quota 13,20 m & contatore dinamico LDM** (`TruckCanvas.tsx` + `utils/export.ts`):
+   - Se `vehicle.length >= 1320`, una linea netta a $Y = 1320$ attraversa il pianale (`#94A3B8`, `strokeDasharray="6 3"`, `strokeWidth 1.5`) con la dicitura `13.20m` in `text-[10px] font-bold fill-slate-600` nel righello di sinistra.
+   - `maxOccupiedY = items.reduce((max, i) => Math.max(max, i.y + i.length), 0)`: se $> 0$ viene tracciata una sottile linea guida tratteggiata `#2563EB` a $Y = maxOccupiedY$ e, nel righello di sinistra, un badge scuro ad alto contrasto (rettangolo `#1E293B` con testo bianco in grassetto `▶ X.XX m`, es. `▶ 3.60 m`). Entrambi presenti anche nello snapshot PNG esportato, con gutter sinistro del viewBox allargato automaticamente per ospitarli.
+
 ---
 
 ## 3. MAPPA ARCHITETTURALE DEI FILE
 - `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`, `LabelDensity`, `SequenceBatchItem`).
-- `src/constants.ts`: Presets veicoli, catalogo colli e definizione `CUSTOM_PALLET` (fuori sagoma).
+- `src/constants.ts`: Presets veicoli, catalogo colli (bordo unico antracite `#334155`), `CUSTOM_PALLET` (fuori sagoma), costanti di rendering condivise (`ALERT_COLOR`, `NOMINAL_QUOTA_CM`, `LDM_BADGE`, colori di quota/contatore LDM).
 - `src/utils/snapping.ts`: Modulo matematico puro (`calculateSnapPosition`, `isRectColliding`, `isOutOfBounds`, `findSmartSpawnPosition`).
+- `src/utils/labels.ts`: Geometria condivisa delle etichette dei colli (`shouldWrapLabel`, `splitLabelIntoTwoLines`, `clipIdForItem`, corpi font in cm), usata sia dal canvas a schermo sia dall'export PNG.
 - `src/utils/export.ts`: Snapshot PNG pulito del pianale (`getPianoExtent`, `buildPianoSvg`, `rasterizeSnapshotToPng`, `copyCanvasToClipboard`) con copia negli appunti e fallback download.
-- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
-- `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
+- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina con clamp verticale anti-uscita, quota nominale 13,20 m e badge LDM dinamico, etichette con `clipPath` e a capo automatico, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
+- `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box ad accordion Sfuso e Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
 - `src/components/PrintReport.tsx`: Scheda di carico A4 (`#print-report`) per stampa / salvataggio PDF.
 - `src/index.css`: Tailwind v4 + regole `@page` / `@media print` della scheda di carico.
 - `src/App.tsx`: Stato globale della stiva, della selezione multipla (`selectedItemIds`) e della densità etichette (`labelDensity`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, motore di stiva sequenziale (`handleExecuteSequence`), `handleUpdateItemsPos` / `handleUpdateItemProperties`.

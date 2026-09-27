@@ -1,4 +1,26 @@
 import type { LabelDensity, PlacedItem, VehicleConfig } from '../types';
+import { hasCollision, isOutOfBounds } from './snapping';
+import {
+  ALERT_COLOR,
+  LDM_BADGE,
+  LDM_BADGE_CENTER_X,
+  LDM_BADGE_COLOR,
+  LDM_BADGE_LEFT_X,
+  LDM_BADGE_RESERVED_LEFT,
+  LDM_GUIDE_COLOR,
+  NOMINAL_QUOTA_CM,
+  NOMINAL_QUOTA_COLOR,
+} from '../constants';
+import {
+  AVERAGE_CHAR_WIDTH_RATIO,
+  clipIdForItem,
+  LABEL_DIMENSION_FONT_SIZE,
+  LABEL_FONT_SIZE,
+  LABEL_WRAP_FONT_SIZE,
+  NARROW_ITEM_WIDTH_CM,
+  shouldWrapLabel,
+  splitLabelIntoTwoLines,
+} from './labels';
 
 /* -------------------------------------------------------------------------- *
  *  SPRINT D — ESPORTAZIONE IMMAGINE
@@ -31,17 +53,15 @@ export const BOTTOM_MARGIN_CM = 50;
 /** Padding del viewBox attorno al pianale, in centimetri reali. */
 const PADDING = { left: 26, right: 6, top: 38, bottom: 8 } as const;
 
+/** Spazio minimo (cm) a sinistra per la dicitura della quota 13,20 m. */
+const NOMINAL_QUOTA_RESERVED_LEFT = 44;
+
 /** Corpi testo (cm reali), allineati al rendering del canvas a schermo. */
 const FONT = {
-  name: 11,
-  dimensions: 9,
   meter: 10,
   caption: 15,
   quota: 11,
 } as const;
-
-/** Larghezza media di un carattere come frazione del corpo (stima per troncare). */
-const AVERAGE_CHAR_WIDTH = 0.58;
 
 /** Palette CAD dello snapshot pulito (sobria, alto contrasto in stampa). */
 const COLORS = {
@@ -53,6 +73,12 @@ const COLORS = {
   caption: '#334155',
   name: '#1E293B',
   dimensions: '#475569',
+  /** Riservato alle sole condizioni di allarme (collisione / fuori sagoma). */
+  alert: ALERT_COLOR,
+  nominalQuota: NOMINAL_QUOTA_COLOR,
+  ldmGuide: LDM_GUIDE_COLOR,
+  ldmBadge: LDM_BADGE_COLOR,
+  ldmBadgeText: '#FFFFFF',
 } as const;
 
 /** Font di sistema: leggibili sia a schermo sia nella rasterizzazione su canvas. */
@@ -112,10 +138,19 @@ export const getPianoExtent = (vehicle: VehicleConfig, items: PlacedItem[]): Pia
   const hasOverhang = items.some((item) => item.y + item.length > vehicle.length);
   const doorLabelY = hasOverhang ? Math.max(...items.map((item) => item.y + item.length)) + 18 : vehicle.length + 24;
 
+  // Contatore LDM e quota nominale hanno bisogno di spazio nel righello sinistro.
+  const hasLdmBadge = items.some((item) => item.y + item.length > 0);
+  const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
+  const leftPadding = Math.max(
+    PADDING.left,
+    hasLdmBadge ? LDM_BADGE_RESERVED_LEFT : 0,
+    showsNominalQuota ? NOMINAL_QUOTA_RESERVED_LEFT : 0
+  );
+
   return {
-    minX: -PADDING.left,
+    minX: -leftPadding,
     minY: -PADDING.top,
-    width: vehicle.width + PADDING.left + PADDING.right,
+    width: vehicle.width + leftPadding + PADDING.right,
     height: PADDING.top + maxY + PADDING.bottom,
     contentBottom: maxY,
     doorLine: vehicle.length,
@@ -142,7 +177,10 @@ const escapeXml = (value: string): string =>
  * La stima è volutamente conservativa (larghezza media dei glifi).
  */
 const truncateToWidth = (text: string, maxWidthCm: number, fontSizeCm: number): string => {
-  const maxChars = Math.max(1, Math.floor(maxWidthCm / (fontSizeCm * AVERAGE_CHAR_WIDTH)));
+  const maxChars = Math.max(
+    1,
+    Math.floor(maxWidthCm / (fontSizeCm * AVERAGE_CHAR_WIDTH_RATIO))
+  );
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
 };
@@ -154,6 +192,12 @@ const round = (value: number): number => Math.round(value * 100) / 100;
  * Etichette interne di un collo, secondo la densità scelta dall'operatore.
  * Lo snapshot esportato non contiene MAI i contorni blu di selezione o lasso.
  *
+ * Stessa logica del canvas a schermo (`TruckCanvas.tsx`):
+ * - sui colli stretti (≤ 70 cm) o con nomi lunghi il nome va a capo su due righe
+ *   centrate (`<tspan>`) con corpo ridotto a 10 cm;
+ * - il testo vive dentro il `clipPath` del collo (applicato da `renderItem`),
+ *   quindi non può fisicamente sbordare sui colli adiacenti.
+ *
  * @param item         Collo da etichettare
  * @param labelDensity Densità etichette (`all` | `client` | `dimensions` | `minimal`)
  */
@@ -162,13 +206,26 @@ const renderItemLabels = (item: PlacedItem, labelDensity: LabelDensity): string 
 
   const centerX = item.width / 2;
   const centerY = item.length / 2;
+  const isNarrow = item.width <= NARROW_ITEM_WIDTH_CM;
 
-  // Corpi mai più grandi del collo stesso: nessuna scritta che sborda.
-  const nameFont = Math.min(FONT.name, item.width * 0.2, item.length * 0.28);
-  const dimFont = Math.min(FONT.dimensions, item.width * 0.16, item.length * 0.22);
+  const lines = shouldWrapLabel(item.name, item.width)
+    ? splitLabelIntoTwoLines(item.name)
+    : null;
+  const nameFont = lines ? LABEL_WRAP_FONT_SIZE : LABEL_FONT_SIZE;
+  const dimFont = isNarrow ? LABEL_WRAP_FONT_SIZE : LABEL_DIMENSION_FONT_SIZE;
   const textMaxWidth = Math.max(4, item.width - 6);
 
+  /** Due righe centrate con i `dy` identici al rendering a schermo. */
+  const twoLineText = (content: [string, string], fontSize: number): string =>
+    `<text x="${round(centerX)}" y="${round(centerY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${round(
+      fontSize
+    )}" font-weight="bold" fill="${COLORS.name}"><tspan x="${round(centerX)}" dy="-6">${escapeXml(
+      content[0]
+    )}</tspan><tspan x="${round(centerX)}" dy="13">${escapeXml(content[1])}</tspan></text>`;
+
   if (labelDensity === 'client') {
+    if (lines) return twoLineText(lines, nameFont);
+
     const label = escapeXml(truncateToWidth(item.name, textMaxWidth, nameFont));
     return `<text x="${round(centerX)}" y="${round(centerY + nameFont * 0.35)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${round(nameFont)}" font-weight="bold" fill="${COLORS.name}">${label}</text>`;
   }
@@ -178,32 +235,60 @@ const renderItemLabels = (item: PlacedItem, labelDensity: LabelDensity): string 
     return `<text x="${round(centerX)}" y="${round(centerY + nameFont * 0.35)}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${round(nameFont)}" font-weight="bold" fill="${COLORS.dimensions}">${label}</text>`;
   }
 
-  // Densità `all`: nome cliente sopra, quote sotto (come a schermo).
-  const name = escapeXml(truncateToWidth(item.name, textMaxWidth, nameFont));
+  // Densità `all`: nome (su una o due righe) sopra, quote sotto.
   const dimensions = `${item.width}×${item.length}`;
 
+  if (lines) {
+    return `<text x="${round(centerX)}" y="${round(centerY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${round(
+      nameFont
+    )}" font-weight="bold" fill="${COLORS.name}"><tspan x="${round(centerX)}" dy="-6">${escapeXml(
+      lines[0]
+    )}</tspan><tspan x="${round(centerX)}" dy="13">${escapeXml(
+      lines[1]
+    )}</tspan><tspan x="${round(centerX)}" dy="12" font-family="${MONO_FONT_FAMILY}" font-size="${round(
+      dimFont
+    )}" font-weight="normal" fill="${COLORS.dimensions}">${dimensions}</tspan></text>`;
+  }
+
+  const name = escapeXml(truncateToWidth(item.name, textMaxWidth, nameFont));
   return [
     `<text x="${round(centerX)}" y="${round(centerY - dimFont * 0.6 + nameFont * 0.35)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${round(nameFont)}" font-weight="bold" fill="${COLORS.name}">${name}</text>`,
     `<text x="${round(centerX)}" y="${round(centerY + nameFont * 0.6 + dimFont * 0.35)}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${round(dimFont)}" fill="${COLORS.dimensions}">${dimensions}</text>`,
   ].join('');
 };
 
-/** Rettangolo colorato del collo (fill pastello + bordo di catalogo). */
-const renderItem = (item: PlacedItem, labelDensity: LabelDensity): string =>
-  [
+/**
+ * Rettangolo colorato del collo (fill pastello + bordo di catalogo).
+ * Il ROSSO è riservato alle sole condizioni di allarme (collisione / fuori
+ * sagoma), esattamente come sul canvas a schermo.
+ */
+const renderItem = (
+  item: PlacedItem,
+  items: PlacedItem[],
+  vehicle: VehicleConfig,
+  labelDensity: LabelDensity
+): string => {
+  const isAlert = hasCollision(item, items) || isOutOfBounds(item, vehicle);
+  const stroke = isAlert ? COLORS.alert : item.borderColor;
+  const strokeWidth = isAlert ? 2 : 1.5;
+
+  return [
     `<g transform="translate(${round(item.x)}, ${round(item.y)})">`,
-    `<rect width="${round(item.width)}" height="${round(item.length)}" rx="2" fill="${item.color}" stroke="${item.borderColor}" stroke-width="1.5"/>`,
-    renderItemLabels(item, labelDensity),
+    `<rect width="${round(item.width)}" height="${round(item.length)}" rx="2" fill="${item.color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+    `<g clip-path="url(#${clipIdForItem(item.id)})">${renderItemLabels(item, labelDensity)}</g>`,
     `</g>`,
   ].join('');
+};
 
 /**
  * Costruisce lo snapshot SVG autonomo e pulito del pianale.
  *
  * Contenuto (in cm reali, Y = 0 in alto verso la Cabina):
- * sfondo bianco, piano di carico, tacche metriche ogni metro, tutti i colli
- * con colore/bordo/etichette, sponde laterali, parete Cabina, linea tratteggiata
- * delle porte posteriori e quote principali. Nessun elemento di interfaccia.
+ * sfondo bianco, piano di carico, tacche metriche ogni metro, quota nominale
+ * 13,20 m (sui mezzi che la raggiungono), linea guida e badge del contatore
+ * dinamico LDM, tutti i colli con colore/bordo/testo ritagliato dal proprio
+ * clipPath, sponde laterali, parete Cabina, linea tratteggiata delle porte
+ * posteriori e didascalie. Nessun elemento di interfaccia.
  *
  * @param vehicle      Configurazione del mezzo
  * @param items        Colli stivati
@@ -232,6 +317,20 @@ export const buildPianoSvg = (
     `<rect x="0" y="0" width="${vehicle.width}" height="${vehicle.length}" rx="2" fill="${COLORS.deck}"/>`
   );
 
+  // Definizioni: un clipPath per collo, così il testo non può sbordare.
+  if (items.length > 0) {
+    parts.push(
+      `<defs>${items
+        .map(
+          (item) =>
+            `<clipPath id="${clipIdForItem(item.id)}"><rect width="${round(
+              item.width
+            )}" height="${round(item.length)}"/></clipPath>`
+        )
+        .join('')}</defs>`
+    );
+  }
+
   // Tacche metriche: linea ogni metro + quota a sinistra del pianale.
   for (let y = 100; y < vehicle.length; y += 100) {
     parts.push(
@@ -240,8 +339,36 @@ export const buildPianoSvg = (
     );
   }
 
+  // Quota nominale 13,20 m: linea netta + dicitura nel righello sinistro.
+  if (vehicle.length >= NOMINAL_QUOTA_CM) {
+    parts.push(
+      `<line x1="0" y1="${NOMINAL_QUOTA_CM}" x2="${vehicle.width}" y2="${NOMINAL_QUOTA_CM}" stroke="${COLORS.nominalQuota}" stroke-width="1.5" stroke-dasharray="6 3"/>`,
+      `<text x="-4" y="${round(
+        NOMINAL_QUOTA_CM + FONT.meter * 0.4
+      )}" text-anchor="end" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.meter}" font-weight="bold" fill="${COLORS.caption}">13.20m</text>`
+    );
+  }
+
+  // Contatore dinamico LDM: linea guida alla Y massima occupata + badge scuro.
+  const maxOccupiedY = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  if (maxOccupiedY > 0) {
+    parts.push(
+      `<line x1="0" y1="${round(maxOccupiedY)}" x2="${vehicle.width}" y2="${round(
+        maxOccupiedY
+      )}" stroke="${COLORS.ldmGuide}" stroke-width="1" stroke-dasharray="6 4"/>`,
+      `<rect x="${LDM_BADGE_LEFT_X}" y="${round(
+        maxOccupiedY - LDM_BADGE.height / 2
+      )}" width="${LDM_BADGE.width}" height="${LDM_BADGE.height}" rx="3" fill="${COLORS.ldmBadge}"/>`,
+      `<text x="${LDM_BADGE_CENTER_X}" y="${round(
+        maxOccupiedY + 3.5
+      )}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.meter}" font-weight="bold" fill="${COLORS.ldmBadgeText}">▶ ${(
+        maxOccupiedY / 100
+      ).toFixed(2)} m</text>`
+    );
+  }
+
   // Colli stivati: colore, bordo e testo formattato secondo la densità.
-  for (const item of items) parts.push(renderItem(item, labelDensity));
+  for (const item of items) parts.push(renderItem(item, items, vehicle, labelDensity));
 
   // Sponde laterali e parete Cabina.
   parts.push(
