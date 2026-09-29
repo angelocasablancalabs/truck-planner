@@ -120,11 +120,6 @@ export const COLOR_FAMILIES: ColorFamily[] = [
   { id: 'purple', name: 'Viola', shades: { light: '#F3E8FF', medium: '#E9D5FF', dark: '#D8B4FE' } },
 ];
 
-/** Tonalità di riferimento per le assegnazioni automatiche (tappe distinguibili). */
-export const COLOR_FAMILY_MEDIUM_SHADES: string[] = COLOR_FAMILIES.map(
-  (family) => family.shades.medium
-);
-
 /* -------------------------------------------------------------------------- *
  *  QUOTE E CONTATORI DEL PIANALE (condivisi tra canvas a schermo ed export PNG)
  * -------------------------------------------------------------------------- */

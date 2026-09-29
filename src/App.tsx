@@ -6,10 +6,9 @@ import type {
   AddItemOptions,
   ItemPositionUpdate,
   LabelDensity,
-  SequenceBatchItem,
   SideNote,
 } from './types';
-import { VEHICLE_PRESETS, PALLET_CATALOG, ITEM_BORDER_COLOR } from './constants';
+import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { PrintReport } from './components/PrintReport';
@@ -23,9 +22,10 @@ import {
 /** Tolleranza di aggancio magnetico applicata dopo una rotazione (cm). */
 const ROTATION_SNAP_THRESHOLD = 10;
 
-/** Limiti di quantità per riga del modulo "Stiva Sequenza". */
-const SEQUENCE_MIN_QUANTITY = 1;
-const SEQUENCE_MAX_QUANTITY = 99;
+/** Limiti di quantità di un lotto caricato dall'accordion multifunzione. */
+const BATCH_MIN_QUANTITY = 1;
+const BATCH_MAX_QUANTITY = 99;
+const BATCH_DEFAULT_QUANTITY = 10;
 
 export default function App() {
   const [vehicle, setVehicle] = useState<VehicleConfig>(VEHICLE_PRESETS[0]); // Default CC Olandese
@@ -73,65 +73,70 @@ export default function App() {
   };
 
   /**
-   * Motore di Stiva Sequenziale (Multi-Tappa).
+   * Motore Batch dell'Accordion Multifunzione.
    *
-   * Stiva i lotti nell'ordine della lista, riempiendo progressivamente il
-   * pianale dalla Cabina verso le Porte posteriori: ogni collo viene piazzato
-   * con `findSmartSpawnPosition` sul pianale GIÀ aggiornato dai colli
-   * precedenti, così la sequenza di tappe risulta rispettata.
+   * Stiva `quantity` colli dello stesso formato in un unico ciclo sincrono:
+   * ogni collo viene piazzato con `findSmartSpawnPosition` sul pianale GIÀ
+   * aggiornato dai colli precedenti, così il lotto si dispone progressivamente
+   * dalla Cabina verso le Porte posteriori (first-fit, senza sovrapposizioni).
+   * Un solo `setItems` finale: aggiornamento atomico, un solo render.
    *
-   * @param batches Lotti da stivare, nell'ordine di consegna (tappa 1 → N).
-   * @param mode    `replace` (default) azzera il carico corrente; `append` accoda.
+   * @param pallet      Voce di catalogo (formato, colore e dimensioni di base).
+   * @param quantity    Numero di colli da stivare (clampato 1–99).
+   * @param orientation `piatto` → W = max, L = min; `punta` → W = min, L = max.
+   * @param name        Cliente / nome lotto (default: nome del catalogo).
+   * @param color       Tinta di riempimento del lotto (default: tinta di catalogo).
    */
-  const handleExecuteSequence = useCallback(
-    (batches: SequenceBatchItem[], mode: 'replace' | 'append' = 'replace') => {
-      if (batches.length === 0) return;
+  const handleAddBatch = useCallback(
+    (
+      pallet: PalletDefinition,
+      quantity: number,
+      orientation: 'piatto' | 'punta',
+      name?: string,
+      color?: string
+    ) => {
+      const requested = Number.isFinite(quantity)
+        ? Math.floor(quantity)
+        : BATCH_DEFAULT_QUANTITY;
+      const qty = Math.min(
+        BATCH_MAX_QUANTITY,
+        Math.max(BATCH_MIN_QUANTITY, requested || BATCH_DEFAULT_QUANTITY)
+      );
+
+      // Piatto: lato lungo verso Cabina/Porte (W = max, L = min).
+      // Punta:  lato corto verso Cabina/Porte (W = min, L = max).
+      const d1 = pallet.width;
+      const d2 = pallet.length;
+      const isPiatto = orientation === 'piatto';
+      const width = isPiatto ? Math.max(d1, d2) : Math.min(d1, d2);
+      const length = isPiatto ? Math.min(d1, d2) : Math.max(d1, d2);
+
+      const itemName = name?.trim() || pallet.name;
+      const itemColor = color || pallet.color;
+      const stamp = Date.now();
 
       setItems((prev) => {
-        // Accumulatore locale: il pianale "corrente" su cui calcolare gli spawn.
-        let current: PlacedItem[] = mode === 'replace' ? [] : [...prev];
-        let counter = 0;
+        // Accumulatore locale: è il pianale "corrente" su cui calcolare gli spawn.
+        let current = [...prev];
 
-        for (const batch of batches) {
-          const pallet = PALLET_CATALOG.find((p) => p.code === batch.palletCode);
-          if (!pallet) continue;
+        for (let i = 0; i < qty; i++) {
+          const spawn = findSmartSpawnPosition(width, length, vehicle, current);
 
-          // Piatto: lato lungo verso Cabina/Porte (W = max, L = min).
-          // Punta:  lato corto verso Cabina/Porte (W = min, L = max).
-          const d1 = pallet.width;
-          const d2 = pallet.length;
-          const isPiatto = batch.orientation === 'piatto';
-          const width = isPiatto ? Math.max(d1, d2) : Math.min(d1, d2);
-          const length = isPiatto ? Math.min(d1, d2) : Math.max(d1, d2);
+          const newItem: PlacedItem = {
+            id: `${pallet.code}_${stamp}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+            code: pallet.code,
+            name: itemName,
+            width,
+            length,
+            x: spawn.x,
+            y: spawn.y,
+            rotation: isPiatto ? 90 : 0,
+            color: itemColor,
+            // Bordo rigido: la tinta del lotto colora solo il riempimento.
+            borderColor: ITEM_BORDER_COLOR,
+          };
 
-          const quantity = Math.min(
-            SEQUENCE_MAX_QUANTITY,
-            Math.max(SEQUENCE_MIN_QUANTITY, Math.floor(batch.quantity) || SEQUENCE_MIN_QUANTITY)
-          );
-
-          for (let i = 0; i < quantity; i++) {
-            counter += 1;
-            const spawn = findSmartSpawnPosition(width, length, vehicle, current);
-
-            const newItem: PlacedItem = {
-              id: `${pallet.code}_${Date.now()}_${counter}_${Math.random()
-                .toString(36)
-                .slice(2, 6)}`,
-              code: pallet.code,
-              name: batch.clientName.trim() || pallet.name,
-              width,
-              length,
-              x: spawn.x,
-              y: spawn.y,
-              rotation: isPiatto ? 90 : 0,
-              color: batch.color || pallet.color,
-              // Bordo rigido anche in stiva sequenziale: la tinta di tappa
-              // colora solo il riempimento, mai il contorno.
-              borderColor: ITEM_BORDER_COLOR,
-            };
-
-            current = [...current, newItem];
-          }
+          current = [...current, newItem];
         }
 
         // Aggiornamento atomico finale: un solo nuovo riferimento di stato.
@@ -382,7 +387,7 @@ export default function App() {
             onRotateSelected={handleRotateSelected}
             onDeleteSelected={handleDeleteSelected}
             onUpdateItemProperties={handleUpdateItemProperties}
-            onExecuteSequence={handleExecuteSequence}
+            onAddBatch={handleAddBatch}
             onClearAll={() => {
               setItems([]);
               setSelectedItemIds([]);

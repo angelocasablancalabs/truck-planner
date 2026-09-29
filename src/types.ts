@@ -51,23 +51,6 @@ export interface ItemPositionUpdate {
 export type LabelDensity = 'all' | 'client' | 'dimensions' | 'minimal';
 
 /**
- * Riga del modulo "Stiva Sequenza" (multi-tappa): descrive un lotto di colli
- * da stivare progressivamente dalla Cabina verso le Porte posteriori.
- *
- * Non esiste un `borderColor` di riga: il contorno dei colli è un invariante
- * globale (`ITEM_BORDER_COLOR`, grigio antracite `#334155`) e la tinta scelta
- * qui colora esclusivamente il riempimento del collo.
- */
-export interface SequenceBatchItem {
-  id: string;
-  quantity: number;
-  palletCode: string; // 'INDU' | 'EUR' | 'HALF_EUR' | 'CC' | 'EC'
-  orientation: 'piatto' | 'punta';
-  clientName: string;
-  color: string;
-}
-
-/**
  * Nota laterale di carico (Side Annotation).
  *
  * Il disponente la posiziona a fianco di uno specifico gruppo di bancali per
