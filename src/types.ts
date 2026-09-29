@@ -67,6 +67,33 @@ export interface SequenceBatchItem {
   color: string;
 }
 
+/**
+ * Nota laterale di carico (Side Annotation).
+ *
+ * Il disponente la posiziona a fianco di uno specifico gruppo di bancali per
+ * tramandare istruzioni operative e avvertenze (es. "bancali poco stabili, fare
+ * attenzione durante il carico!"). La nota vive in una corsia dedicata a destra
+ * della parete del semirimorchio e viene riportata automaticamente sia nello
+ * snapshot PNG ad alta risoluzione sia nella scheda di carico A4 in PDF.
+ */
+export interface SideNote {
+  id: string;
+  /** Quota Y in cm lungo il camion (0 = Cabina, vehicle.length = Porte). */
+  y: number;
+  /** Testo unico della nota (multi-riga): nessun titolo separato. */
+  content: string;
+  /** Sfondo pastello della card (ereditato dal collo selezionato, o bianco). */
+  color: string;
+  /** Colore del bordo della card (#94A3B8 oppure #334155). */
+  borderColor: string;
+  /** Larghezza in cm (default 140, min 70, max 300). */
+  width: number;
+  /** Altezza esplicita in cm (se ridimensionata dalla maniglia, min 40). */
+  height?: number;
+  /** Dimensione del font in px (9, 11 o 14; default 11). */
+  fontSize?: number;
+}
+
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */
 export interface AddItemOptions {
   /** Larghezza imposta in cm (es. 100 per Punta, 120 per Piatto). */

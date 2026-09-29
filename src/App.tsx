@@ -7,6 +7,7 @@ import type {
   ItemPositionUpdate,
   LabelDensity,
   SequenceBatchItem,
+  SideNote,
 } from './types';
 import { VEHICLE_PRESETS, PALLET_CATALOG, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
@@ -33,6 +34,10 @@ export default function App() {
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   // Densità delle etichette stampate sui colli (default: nome + quote).
   const [labelDensity, setLabelDensity] = useState<LabelDensity>('all');
+  // Note laterali di carico: avvertenze posizionate a fianco dei bancali.
+  const [notes, setNotes] = useState<SideNote[]>([]);
+  // Nota attualmente selezionata (null = nessuna): alimenta il pannello sidebar.
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
   /** Imposta l'intera lista di selezione (sostituzione, non toggle). */
   const handleSelectItems = useCallback((ids: string[]) => {
@@ -241,11 +246,81 @@ export default function App() {
     setSelectedItemIds([]);
   }, [selectedItemIds]);
 
+  /* ------------------------------------------------------------------------ *
+   *  NOTE LATERALI DI CARICO (SIDE ANNOTATIONS)
+   *
+   *  Una nota vive nella corsia a destra della parete del semirimorchio e non
+   *  occupa mai il pianale utile: nessun impatto sui metri lineari. Viene
+   *  ridisegnata identica sul canvas, nello snapshot PNG e sulla scheda A4.
+   * ------------------------------------------------------------------------ */
+
+  /** Una sola nota può restare selezionata: la selezione è mutuamente esclusiva
+   *  con quella dei colli (o si sta lavorando sui bancali, o sulle note). */
+  const handleSelectNote = useCallback((id: string | null) => {
+    setSelectedNoteId(id);
+    if (id !== null) setSelectedItemIds([]);
+  }, []);
+
+  /** Crea una nota laterale e la mette subito in editing nella sidebar. */
+  const handleAddNote = useCallback(
+    (noteData: Omit<SideNote, 'id'>) => {
+      const newNote: SideNote = {
+        ...noteData,
+        id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      };
+      setNotes((prev) => [...prev, newNote]);
+      setSelectedNoteId(newNote.id);
+      setSelectedItemIds([]);
+    },
+    []
+  );
+
+  /** Aggiorna titolo, testo o colore di una nota. */
+  const handleUpdateNote = useCallback((id: string, updates: Partial<SideNote>) => {
+    setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, ...updates } : note)));
+  }, []);
+
+  /** Elimina una nota: la selezione viene azzerata per non lasciare riferimenti. */
+  const handleDeleteNote = useCallback((id: string) => {
+    setNotes((prev) => prev.filter((note) => note.id !== id));
+    setSelectedNoteId(null);
+  }, []);
+
+  /** Trascinamento lungo l'asse Y (Cabina → Porte) della corsia note. */
+  const handleUpdateNotePos = useCallback((id: string, y: number) => {
+    setNotes((prev) =>
+      prev.map((note) => (note.id === id ? { ...note, y: toPrecision(y) } : note))
+    );
+  }, []);
+
+  /**
+   * Ridimensionamento della card di nota dalla maniglia dell'angolo
+   * basso-destro: larghezza e altezza vengono clampate nei limiti consentiti
+   * (70–300 cm × 40–400 cm). L'altezza diventa esplicita, quindi da quel momento
+   * il box non si riadatta più da solo al testo.
+   */
+  const handleUpdateNoteSize = useCallback(
+    (id: string, size: { width: number; height: number }) => {
+      setNotes((prev) =>
+        prev.map((note) =>
+          note.id === id
+            ? { ...note, width: toPrecision(size.width), height: toPrecision(size.height) }
+            : note
+        )
+      );
+    },
+    []
+  );
+
   // Gestione scorciatoie da tastiera (Spazio e Canc)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
         return; // Non intercettare se si sta scrivendo in un input
+      }
+      // Anche la textarea della nota è un campo di scrittura: nessuna scorciatoia.
+      if (e.target instanceof HTMLTextAreaElement) {
+        return;
       }
 
       if (e.code === 'Space') {
@@ -253,13 +328,20 @@ export default function App() {
         handleRotateSelected();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        handleDeleteSelected();
+        // Priorità: se è attiva una nota (e nessun collo è selezionato) il tasto
+        // `Canc` elimina la nota; altrimenti elimina i colli selezionati.
+        if (selectedNoteId !== null && selectedItemIds.length === 0) {
+          setNotes((prev) => prev.filter((note) => note.id !== selectedNoteId));
+          setSelectedNoteId(null);
+        } else {
+          handleDeleteSelected();
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRotateSelected, handleDeleteSelected]);
+  }, [handleRotateSelected, handleDeleteSelected, selectedNoteId, selectedItemIds]);
 
   // Lista dei colli selezionati, nell'ordine di selezione.
   const selectedItems = selectedItemIds
@@ -278,10 +360,15 @@ export default function App() {
           <TruckCanvas
             vehicle={vehicle}
             items={items}
+            notes={notes}
             selectedItemIds={selectedItemIds}
+            selectedNoteId={selectedNoteId}
             labelDensity={labelDensity}
             onChangeLabelDensity={setLabelDensity}
             onSelectItems={handleSelectItems}
+            onSelectNote={handleSelectNote}
+            onUpdateNotePos={handleUpdateNotePos}
+            onUpdateNoteSize={handleUpdateNoteSize}
             onUpdateItemsPos={handleUpdateItemsPos}
           />
         </div>
@@ -300,6 +387,11 @@ export default function App() {
               setItems([]);
               setSelectedItemIds([]);
             }}
+            notes={notes}
+            selectedNoteId={selectedNoteId}
+            onAddNote={handleAddNote}
+            onUpdateNote={handleUpdateNote}
+            onDeleteNote={handleDeleteNote}
             selectedItems={selectedItems}
             items={items}
             labelDensity={labelDensity}
@@ -308,7 +400,7 @@ export default function App() {
       </div>
 
       {/* Scheda di carico A4: presente nel DOM, visibile solo su carta. */}
-      <PrintReport vehicle={vehicle} items={items} labelDensity={labelDensity} />
+      <PrintReport vehicle={vehicle} items={items} notes={notes} labelDensity={labelDensity} />
     </>
   );
 }

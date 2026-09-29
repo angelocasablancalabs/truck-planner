@@ -11,14 +11,26 @@ export default defineConfig({
   server: {
     watch: {
       /**
-       * Gli editor che salvano con sostituzione atomica creano, accanto al file
-       * reale, una cartella temporanea `.<nomefile>.<pid>.<uuid>.tmpdir/`.
-       * Su Windows quel file temporaneo può restare bloccato (antivirus,
-       * indicizzatore) proprio mentre chokidar prova a registrarlo: il watcher
-       * emette `EBUSY` e il dev server termina. Escludendo le directory
-       * temporanee il watcher non le vede più e la stabilità è garantita.
+       * Su Windows chokidar muore con `EBUSY` se prova a registrare un file
+       * permanentemente bloccato da un altro processo: l'errore viene emesso
+       * sull'evento e Vite termina. Le due sorgenti osservate finora:
+       *
+       *  1. gli editor che salvano con sostituzione atomica creano accanto al
+       *     file reale una cartella `.<nomefile>.<pid>.<uuid>.tmpdir/`;
+       *  2. gli script di verifica headless creano profili Chrome completi
+       *     (`tmp/<nome>-profile/Default/Network/Cookies`, `History`, …), che
+       *     sono database SQLite tenuti aperti dal browser.
+       *
+       * Escludendo queste directory il watcher non le vede più, mentre `src/`
+       * continua a essere sorvegliato normalmente.
        */
-      ignored: ['**/.*.tmpdir/**', '**/*.tmpdir/**'],
+      ignored: [
+        '**/.*.tmpdir/**',
+        '**/*.tmpdir/**',
+        '**/tmp/**',
+        '**/*-profile/**',
+        '**/*.tmp/**',
+      ],
     },
   },
 })

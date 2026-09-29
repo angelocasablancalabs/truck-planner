@@ -1,4 +1,4 @@
-import type { LabelDensity, PlacedItem, VehicleConfig } from '../types';
+import type { LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { calculateLdmMetrics, hasCollision, isOutOfBounds } from './snapping';
 import {
   ALERT_COLOR,
@@ -27,6 +27,11 @@ import {
   shouldWrapLabel,
   splitLabelIntoTwoLines,
 } from './labels';
+import {
+  NOTE_LANE_OFFSET_CM,
+  NOTE_PADDING_CM,
+  resolveNoteLayouts,
+} from './sideNotes';
 
 /* -------------------------------------------------------------------------- *
  *  SPRINT D — ESPORTAZIONE IMMAGINE
@@ -61,6 +66,12 @@ const PADDING = { left: 26, right: 6, top: 38, bottom: 8 } as const;
 
 /** Spazio minimo (cm) a sinistra per la dicitura della quota 13,20 m. */
 const NOMINAL_QUOTA_RESERVED_LEFT = 44;
+
+/**
+ * Margine (cm) riservato a destra dopo la card di nota, così l'ultima
+ * annotazione non tocca mai il bordo dell'immagine esportata.
+ */
+const NOTE_LANE_RIGHT_MARGIN_CM = 40;
 
 /** Corpi testo (cm reali), allineati al rendering del canvas a schermo. */
 const FONT = {
@@ -99,7 +110,8 @@ const FALLBACK_FILE_NAME = 'piano-di-carico.png';
 
 /**
  * Ingombro vettoriale completo del pianale, in centimetri reali.
- * Include l'eventuale sforamento posteriore dei colli oltre le porte.
+ * Include l'eventuale sforamento posteriore dei colli oltre le porte e la
+ * corsia delle note laterali quando sono presenti.
  */
 export interface PianoExtent {
   /** Bordo sinistro del viewBox (negativo: spazio per le tacche metriche). */
@@ -116,6 +128,8 @@ export interface PianoExtent {
   doorLine: number;
   /** Y (cm) della didascalia "PORTE POSTERIORI". */
   doorLabelY: number;
+  /** Ascissa (cm) della corsia delle note laterali (a destra della parete). */
+  noteLaneX: number;
 }
 
 /** Snapshot SVG autonomo + dimensioni in px CSS dell'immagine finale. */
@@ -135,20 +149,36 @@ export interface PianoSnapshot {
  * posteriori, così nessun bancale viene tagliato nell'immagine:
  * `maxY = max(vehicle.length, ...items.map(i => i.y + i.length)) + 50`.
  *
+ * Se sono presenti **note laterali** la larghezza del viewBox viene allargata
+ * sul lato destro per includere l'intera corsia note
+ * (`vehicle.width + 30 + 140 + 40` ≈ 460 cm totali, contro i 374 cm del caso
+ * simmetrico senza note). Senza note tutto resta esattamente come prima.
+ *
  * Con densità etichette `minimal` l'immagine resta volutamente pulita: nessuna
  * linea guida e nessun badge LDM, quindi nessuno spazio riservato ai lati.
  *
  * @param vehicle      Configurazione del mezzo (dimensioni utili in cm)
  * @param items        Colli stivati sul pianale
  * @param labelDensity Densità etichette applicata all'immagine (`all` di default)
+ * @param notes        Note laterali da includere nello snapshot
  */
 export const getPianoExtent = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
-  labelDensity: LabelDensity = 'all'
+  labelDensity: LabelDensity = 'all',
+  notes: SideNote[] = []
 ): PianoExtent => {
-  const maxY =
-    Math.max(vehicle.length, ...items.map((item) => item.y + item.length)) + BOTTOM_MARGIN_CM;
+  const maxItemBottom = Math.max(vehicle.length, ...items.map((item) => item.y + item.length));
+
+  // Le card di nota possono scendere sotto l'ultimo collo: il viewBox deve
+  // allungarsi per contenerle per intero, altrimenti verrebbero tagliate.
+  const hasNotes = notes.length > 0;
+  const noteLayouts = hasNotes ? resolveNoteLayouts(notes) : [];
+  const maxNoteBottom = noteLayouts.reduce(
+    (max, layout) => Math.max(max, layout.note.y + layout.height),
+    0
+  );
+  const maxY = Math.max(maxItemBottom, maxNoteBottom) + BOTTOM_MARGIN_CM;
 
   // Didascalia delle porte: sotto il pianale, oppure sotto l'eventuale sforamento.
   const hasOverhang = items.some((item) => item.y + item.length > vehicle.length);
@@ -168,9 +198,13 @@ export const getPianoExtent = (
   // Badge LDM del lato destro: vive FUORI dalla parete destra, quindi con un
   // carico asimmetrico il viewBox deve riservare spazio anche a destra.
   const needsRightLdmBadge = hasLdmBadge && ldm.isAsymmetric;
+  // Corsia note: 30 cm di stacco + la card più larga scelta dall'operatore
+  // (le note sono ridimensionabili) + 40 cm di margine di sicurezza.
+  const widestNote = notes.reduce((max, note) => Math.max(max, note.width), 0);
   const rightPadding = Math.max(
     PADDING.right,
-    needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0
+    needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0,
+    hasNotes ? NOTE_LANE_OFFSET_CM + widestNote + NOTE_LANE_RIGHT_MARGIN_CM : 0
   );
 
   return {
@@ -181,6 +215,7 @@ export const getPianoExtent = (
     contentBottom: maxY,
     doorLine: vehicle.length,
     doorLabelY,
+    noteLaneX: vehicle.width + NOTE_LANE_OFFSET_CM,
   };
 };
 
@@ -306,6 +341,71 @@ const renderItem = (
   ].join('');
 };
 
+/** ID del `clipPath` che ritaglia il testo di una nota sul proprio box. */
+export const noteClipId = (noteId: string): string => `note-clip-${noteId}`;
+
+/**
+ * Corsia delle note laterali nello snapshot SVG: una card per nota, alla stessa
+ * ascissa (`vehicle.width + 30 cm`) e con la stessa geometria del canvas a
+ * schermo, così l'immagine condivisa su WhatsApp riporta le istruzioni
+ * operative esattamente come le vede il disponente.
+ *
+ * Ogni card contiene un **unico testo** (`content`) mandato a capo in `<tspan>`
+ * a coordinate relative all'origine del box (`x = 10` cm): larghezza, altezza e
+ * corpo del testo sono quelli scelti dall'operatore.
+ *
+ * @param notes Note da disegnare, nell'ordine di creazione
+ * @param laneX Ascissa (cm) della corsia note
+ */
+const renderNotes = (notes: SideNote[], laneX: number): string => {
+  const layouts = resolveNoteLayouts(notes);
+
+  // Clip solo dove serve: un box più basso del testo (altezza fissata a mano)
+  // non deve far uscire le righe di troppo dalla sagoma colorata.
+  const clipped = layouts.filter((layout) => layout.textHeight > layout.height);
+  const defs =
+    clipped.length > 0
+      ? `<defs>${clipped
+          .map(
+            ({ note, height }) =>
+              `<clipPath id="${noteClipId(note.id)}"><rect width="${round(
+                note.width
+              )}" height="${round(height)}"/></clipPath>`
+          )
+          .join('')}</defs>`
+      : '';
+
+  const cards = layouts
+    .map(({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
+      const body = lines
+        .map(
+          (line, index) =>
+            `<tspan x="${round(NOTE_PADDING_CM)}" y="${round(
+              firstBaselineCm + index * lineHeightCm
+            )}">${escapeXml(line)}</tspan>`
+        )
+        .join('');
+
+      const text = `<text font-family="${FONT_FAMILY}" font-size="${round(
+        fontSize
+      )}" fill="${COLORS.dimensions}">${body}</text>`;
+
+      return [
+        `<g transform="translate(${round(laneX)}, ${round(note.y)})">`,
+        `<rect width="${round(note.width)}" height="${round(
+          height
+        )}" rx="4" fill="${note.color}" stroke="${note.borderColor}" stroke-width="1"/>`,
+        textHeight > height
+          ? `<g clip-path="url(#${noteClipId(note.id)})">${text}</g>`
+          : text,
+        `</g>`,
+      ].join('');
+    })
+    .join('');
+
+  return `${defs}${cards}`;
+};
+
 /**
  * Costruisce lo snapshot SVG autonomo e pulito del pianale.
  *
@@ -313,19 +413,22 @@ const renderItem = (
  * sfondo bianco, piano di carico, tacche metriche ogni metro, quota nominale
  * 13,20 m (sui mezzi che la raggiungono), linea guida e badge del contatore
  * dinamico LDM, tutti i colli con colore/bordo/testo ritagliato dal proprio
- * clipPath, sponde laterali, parete Cabina, linea tratteggiata delle porte
- * posteriori e didascalie. Nessun elemento di interfaccia.
+ * clipPath, la corsia delle note laterali (se presenti), sponde laterali,
+ * parete Cabina, linea tratteggiata delle porte posteriori e didascalie.
+ * Nessun elemento di interfaccia.
  *
  * @param vehicle      Configurazione del mezzo
  * @param items        Colli stivati
  * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
+ * @param notes        Note laterali di carico da includere nell'immagine
  */
 export const buildPianoSvg = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
-  labelDensity: LabelDensity
+  labelDensity: LabelDensity,
+  notes: SideNote[] = []
 ): PianoSnapshot => {
-  const extent = getPianoExtent(vehicle, items, labelDensity);
+  const extent = getPianoExtent(vehicle, items, labelDensity, notes);
   const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
   const height = Math.max(1, Math.round(extent.height * pxPerCm));
 
@@ -459,6 +562,10 @@ export const buildPianoSvg = (
   // Colli stivati: colore, bordo e testo formattato secondo la densità.
   for (const item of items) parts.push(renderItem(item, items, vehicle, labelDensity));
 
+  // Note laterali di carico: stessa corsia del canvas a schermo, a destra della
+  // parete del semirimorchio. Nessun contorno blu di selezione nell'export.
+  if (notes.length > 0) parts.push(renderNotes(notes, extent.noteLaneX));
+
   // Sponde laterali e parete Cabina.
   parts.push(
     `<line x1="0" y1="0" x2="${vehicle.width}" y2="0" stroke="${COLORS.wall}" stroke-width="4"/>`,
@@ -568,17 +675,19 @@ const downloadBlob = (blob: Blob, fileName: string): void => {
  * @param vehicle      Configurazione del mezzo
  * @param items        Colli stivati
  * @param labelDensity Densità delle etichette applicata allo snapshot
+ * @param notes        Note laterali di carico da riportare nell'immagine
  * @returns `true` se l'immagine è finita negli appunti, `false` se è stata scaricata
  */
 export const copyCanvasToClipboard = async (
   vehicle: VehicleConfig,
   items: PlacedItem[],
-  labelDensity: LabelDensity
+  labelDensity: LabelDensity,
+  notes: SideNote[] = []
 ): Promise<boolean> => {
   let pngBlob: Blob;
 
   try {
-    pngBlob = await rasterizeSnapshotToPng(buildPianoSvg(vehicle, items, labelDensity));
+    pngBlob = await rasterizeSnapshotToPng(buildPianoSvg(vehicle, items, labelDensity, notes));
   } catch (error) {
     console.error('[export] Generazione dello snapshot PNG non riuscita:', error);
     return false;

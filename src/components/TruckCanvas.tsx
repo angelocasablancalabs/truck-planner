@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
-import type { VehicleConfig, PlacedItem, ItemPositionUpdate, LabelDensity } from '../types';
+import type {
+  VehicleConfig,
+  PlacedItem,
+  ItemPositionUpdate,
+  LabelDensity,
+  SideNote,
+} from '../types';
 import {
   calculateLdmMetrics,
   calculateSnapPosition,
@@ -31,14 +37,33 @@ import {
   shouldWrapLabel,
   splitLabelIntoTwoLines,
 } from '../utils/labels';
+import {
+  NOTE_LANE_OFFSET_CM,
+  NOTE_MAX_HEIGHT_CM,
+  NOTE_MAX_WIDTH_CM,
+  NOTE_MIN_HEIGHT_CM,
+  NOTE_MIN_WIDTH_CM,
+  NOTE_PADDING_CM,
+  NOTE_RESIZE_HANDLE_COLOR,
+  NOTE_RESIZE_HANDLE_SIZE_CM,
+  resolveNoteLayouts,
+} from '../utils/sideNotes';
 
 /** Colori del rettangolo di selezione (lasso) e della selezione attiva. */
 const SELECTION_COLOR = '#2563EB';
 const LASSO_FILL = '#3B82F6';
 const LASSO_FILL_OPACITY = 0.15;
 
-/** Spostamento minimo (px schermo) oltre il quale un drag non è più un click. */
+/**
+ * Spostamento minimo (px schermo) oltre il quale un drag non è più un click.
+ */
 const DRAG_THRESHOLD_PX = 3;
+
+/** Spostamento minimo (cm reali) perché il drag di una nota sia registrato. */
+const NOTE_DRAG_THRESHOLD_CM = 0.2;
+
+/** ID del `clipPath` che ritaglia il testo di una nota sul proprio box. */
+const clipIdForNote = (noteId: string): string => `note-clip-${noteId}`;
 
 /* --- Clamp rigido intelligente del pan (asse Y) --------------------------- */
 /** Margine (px) riservato in alto alla didascalia "▲ CABINA ▲". */
@@ -208,29 +233,75 @@ interface DragState {
   }[];
 }
 
+/**
+ * Stato del trascinamento di una nota laterale: le note si spostano solo lungo
+ * l'asse Y (Cabina → Porte), restando ancorate alla corsia a destra del mezzo.
+ */
+interface NoteDragState {
+  id: string;
+  /** Cursore in cm reali al momento del pointerdown. */
+  startCursorY: number;
+  /** Quota Y di partenza della nota (cm). */
+  startY: number;
+  /** Spostamento minimo (cm) che ha già promosso il gesto a trascinamento. */
+  moved: boolean;
+}
+
+/**
+ * Stato del ridimensionamento di una nota laterale: la maniglia vive
+ * nell'angolo basso-destro della card, quindi trascinandola si aggiornano
+ * larghezza e altezza del box (mai la quota Y, che resta quella della corsia).
+ */
+interface NoteResizeState {
+  id: string;
+  /** Cursore in cm reali al momento del pointerdown sulla maniglia. */
+  startCursorX: number;
+  startCursorY: number;
+  /** Dimensioni di partenza del box (cm). */
+  startWidth: number;
+  startHeight: number;
+}
+
 interface TruckCanvasProps {
   vehicle: VehicleConfig;
   items: PlacedItem[];
+  /** Note laterali: vivono nella corsia a destra della parete del mezzo. */
+  notes: SideNote[];
   selectedItemIds: string[];
+  /** Nota selezionata (null = nessuna): bordo blu sulla card e pannello sidebar. */
+  selectedNoteId: string | null;
   /** Densità delle etichette stampate dentro i colli. */
   labelDensity: LabelDensity;
   onChangeLabelDensity: (density: LabelDensity) => void;
   onSelectItems: (ids: string[]) => void;
+  /** Selezione di una nota (azzera la selezione dei colli). */
+  onSelectNote: (id: string | null) => void;
+  /** Trascinamento verticale di una nota lungo la corsia (cm reali). */
+  onUpdateNotePos: (id: string, y: number) => void;
+  /** Ridimensionamento della card di nota (larghezza / altezza in cm). */
+  onUpdateNoteSize: (id: string, size: { width: number; height: number }) => void;
   onUpdateItemsPos: (updates: ItemPositionUpdate[]) => void;
 }
 
 export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   vehicle,
   items,
+  notes,
   selectedItemIds,
+  selectedNoteId,
   labelDensity,
   onChangeLabelDensity,
   onSelectItems,
+  onSelectNote,
+  onUpdateNotePos,
+  onUpdateNoteSize,
   onUpdateItemsPos,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const draggingItem = useRef<DragState | null>(null);
+  const draggingNote = useRef<NoteDragState | null>(null);
+  const resizingNote = useRef<NoteResizeState | null>(null);
   const panningView = useRef<{ start: Point; pan: Point; moved: boolean } | null>(null);
 
   // Lasso: vertice iniziale in cm reali + rettangolo in px schermo per il disegno.
@@ -297,6 +368,68 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   // Badge del lato destro: subito oltre la parete destra del pianale.
   const rightLdmBadgeLeftX = ldmBadgeRightLeftX(vehicle.width);
   const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
+
+  /**
+   * Corsia delle note laterali: tutte le card vivono a
+   * `X = vehicle.width + NOTE_LANE_OFFSET_CM`, fuori dal pianale utile, quindi
+   * non entrano mai nel calcolo dei metri lineari. Le eventuali sovrapposizioni
+   * vengono risolte spingendo la card più in basso (`resolveNoteLayouts`), senza
+   * mai modificare la quota Y scelta dall'operatore.
+   */
+  const noteLaneX = vehicle.width + NOTE_LANE_OFFSET_CM;
+  const noteLayouts = resolveNoteLayouts(notes);
+  const selectedNoteIdSet = new Set(selectedNoteId ? [selectedNoteId] : []);
+
+  /**
+   * Trascinamento di una nota: si aggiorna solo la Y, con clamp tra 0 (Cabina) e
+   * la quota di fondo dinamica `effectiveLength` (Porte posteriori o ultimo
+   * collo sbordato). La X resta sempre quella della corsia note.
+   */
+  const handleNotePointerDown = (note: SideNote, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    // Il gesto è della nota: non deve né selezionare i colli né panare la vista.
+    e.stopPropagation();
+
+    const cursor = toCanvasCm(e.clientX, e.clientY);
+    if (!cursor) return;
+
+    (e.target as Element).setPointerCapture(e.pointerId);
+    onSelectNote(note.id);
+    draggingNote.current = {
+      id: note.id,
+      startCursorY: cursor.y,
+      startY: note.y,
+      moved: false,
+    };
+  };
+
+  /**
+   * Pointerdown sulla maniglia di ridimensionamento (angolo basso-destro):
+   * il gesto appartiene alla maniglia, quindi non trascina la card né fa pan
+   * del canvas. Larghezza e altezza vengono poi aggiornate in `pointerMove`.
+   */
+  const handleNoteResizePointerDown = (
+    note: SideNote,
+    height: number,
+    e: React.PointerEvent
+  ) => {
+    if (e.button !== 0) return;
+    // Doppia barriera: la maniglia non deve mai muovere la nota o la vista.
+    e.stopPropagation();
+
+    const cursor = toCanvasCm(e.clientX, e.clientY);
+    if (!cursor) return;
+
+    (e.target as Element).setPointerCapture(e.pointerId);
+    onSelectNote(note.id);
+    resizingNote.current = {
+      id: note.id,
+      startCursorX: cursor.x,
+      startCursorY: cursor.y,
+      startWidth: note.width,
+      startHeight: height,
+    };
+  };
 
   // --- Misura del viewport --------------------------------------------------
   useEffect(() => {
@@ -524,6 +657,42 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    // 0) Ridimensionamento di una nota: la maniglia guida larghezza e altezza,
+    //    entrambe clampate nei limiti consentiti (70–300 cm × 40–400 cm).
+    const resize = resizingNote.current;
+    if (resize) {
+      const cursor = toCanvasCm(e.clientX, e.clientY);
+      if (!cursor) return;
+      const width = Math.max(
+        NOTE_MIN_WIDTH_CM,
+        Math.min(NOTE_MAX_WIDTH_CM, resize.startWidth + (cursor.x - resize.startCursorX))
+      );
+      const height = Math.max(
+        NOTE_MIN_HEIGHT_CM,
+        Math.min(NOTE_MAX_HEIGHT_CM, resize.startHeight + (cursor.y - resize.startCursorY))
+      );
+      if (width !== resize.startWidth || height !== resize.startHeight) {
+        onUpdateNoteSize(resize.id, { width: toPrecision(width), height: toPrecision(height) });
+      }
+      return;
+    }
+
+    // 1) Trascinamento di una nota laterale: si aggiorna la sola quota Y.
+    const noteDrag = draggingNote.current;
+    if (noteDrag) {
+      const cursor = toCanvasCm(e.clientX, e.clientY);
+      if (!cursor) return;
+      const deltaY = cursor.y - noteDrag.startCursorY;
+      if (Math.abs(deltaY) > NOTE_DRAG_THRESHOLD_CM) noteDrag.moved = true;
+      if (!noteDrag.moved) return;
+      const nextY = Math.max(
+        0,
+        Math.min(effectiveLength, noteDrag.startY + deltaY)
+      );
+      onUpdateNotePos(noteDrag.id, nextY);
+      return;
+    }
+
     // 1) Lasso attivo: aggiorna il rettangolo visualizzato.
     if (lassoStart.current) {
       const current = toSvgPoint(e.clientX, e.clientY);
@@ -639,6 +808,22 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       (e.target as Element).releasePointerCapture(e.pointerId);
     } catch {
       // Il pointer capture potrebbe essere già stato rilasciato dal browser.
+    }
+
+    // Rilascio dopo il ridimensionamento di una nota: la selezione resta e il
+    // click di sfondo non deve azzerarla.
+    if (resizingNote.current) {
+      resizingNote.current = null;
+      suppressBackgroundClick.current = true;
+      return;
+    }
+
+    // Rilascio dopo il trascinamento di una nota laterale: la selezione della
+    // nota resta, mentre il click di sfondo non deve azzerarla.
+    if (draggingNote.current) {
+      if (draggingNote.current.moved) suppressBackgroundClick.current = true;
+      draggingNote.current = null;
+      return;
     }
 
     // Chiusura del lasso: calcolo dell'intersezione al rilascio del mouse.
@@ -855,11 +1040,29 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                 floodOpacity="0.18"
               />
             </filter>
+            {/* Ombra sobria delle card di nota: stacca la corsia note dal fondo
+                grigio senza introdurre volumetrie superflue. */}
+            <filter id="side-note-shadow" x="-15%" y="-10%" width="130%" height="125%">
+              <feDropShadow
+                dx="0"
+                dy="1.4"
+                stdDeviation="2"
+                floodColor="#0F172A"
+                floodOpacity="0.14"
+              />
+            </filter>
             {/* Un clipPath per ogni collo: il testo resta fisicamente dentro il
                 proprio rettangolo e non può sbordare sui colli adiacenti. */}
             {items.map((item) => (
               <clipPath key={item.id} id={clipIdForItem(item.id)}>
                 <rect width={item.width} height={item.length} />
+              </clipPath>
+            ))}
+            {/* Un clipPath per ogni nota: interviene solo se l'operatore ha
+                ridotto il box a un'altezza inferiore a quella del testo. */}
+            {noteLayouts.map(({ note, height }) => (
+              <clipPath key={note.id} id={clipIdForNote(note.id)}>
+                <rect width={note.width} height={height} />
               </clipPath>
             ))}
           </defs>
@@ -1192,6 +1395,79 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                 pointerEvents="none"
               />
             )}
+
+            {/* CORSIA DELLE NOTE LATERALI: tutte le card a
+                X = vehicle.width + 30 cm, fuori dal pianale utile. Cliccando una
+                nota la si seleziona (e si deselezionano i colli); trascinandola
+                con il puntatore si sposta lungo l'asse Y, mentre la maniglia
+                nell'angolo basso-destro ne ridimensiona il box. */}
+            {noteLayouts.map(({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
+              const isSelected = selectedNoteIdSet.has(note.id);
+
+              return (
+                <g
+                  key={note.id}
+                  transform={`translate(${noteLaneX}, ${note.y})`}
+                  onPointerDown={(e) => handleNotePointerDown(note, e)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="cursor-move"
+                >
+                  <rect
+                    width={note.width}
+                    height={height}
+                    rx={4}
+                    fill={note.color}
+                    stroke={isSelected ? SELECTION_COLOR : note.borderColor}
+                    strokeWidth={isSelected ? 2 : 1}
+                    filter="url(#side-note-shadow)"
+                  />
+
+                  {/* UNICO TESTO DELLA NOTA: coordinate RELATIVE all'origine del
+                      box (il gruppo è già traslato in `noteLaneX, note.y`).
+                      `x = 10` per il testo e per ogni `tspan`, così l'intero
+                      contenuto resta rigorosamente dentro il rettangolo. Il
+                      clip aggiuntivo vale solo per un box più basso del testo. */}
+                  <g
+                    clipPath={
+                      textHeight > height ? `url(#${clipIdForNote(note.id)})` : undefined
+                    }
+                  >
+                    <text
+                      x={NOTE_PADDING_CM}
+                      fontSize={fontSize}
+                      className="fill-slate-700 pointer-events-none select-none"
+                    >
+                      {lines.map((line, index) => (
+                        <tspan
+                          key={index}
+                          x={NOTE_PADDING_CM}
+                          y={firstBaselineCm + index * lineHeightCm}
+                        >
+                          {line}
+                        </tspan>
+                      ))}
+                    </text>
+                  </g>
+
+                  {/* MANIGLIA DI RIDIMENSIONAMENTO (angolo basso-destro):
+                      visibile solo sulla nota selezionata. Il gesto è catturato
+                      qui e non propaga né alla card (drag Y) né al canvas (pan). */}
+                  {isSelected && (
+                    <rect
+                      x={note.width - NOTE_RESIZE_HANDLE_SIZE_CM}
+                      y={height - NOTE_RESIZE_HANDLE_SIZE_CM}
+                      width={NOTE_RESIZE_HANDLE_SIZE_CM}
+                      height={NOTE_RESIZE_HANDLE_SIZE_CM}
+                      rx={1.5}
+                      fill={NOTE_RESIZE_HANDLE_COLOR}
+                      className="cursor-se-resize"
+                      onPointerDown={(e) => handleNoteResizePointerDown(note, height, e)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
+                </g>
+              );
+            })}
           </g>
 
           {/* Rettangolo di selezione (lasso): disegnato in px schermo, sopra il

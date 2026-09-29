@@ -6,10 +6,27 @@ import type {
   AddItemOptions,
   SequenceBatchItem,
   LabelDensity,
+  SideNote,
 } from '../types';
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES, COLOR_FAMILY_MEDIUM_SHADES } from '../constants';
 import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
+import {
+  NOTE_BORDER_COLOR,
+  NOTE_DEFAULT_FONT_SIZE,
+  NOTE_DEFAULT_WIDTH_CM,
+  NOTE_FONT_SIZES,
+  NOTE_MAX_HEIGHT_CM,
+  NOTE_MAX_WIDTH_CM,
+  NOTE_MIN_HEIGHT_CM,
+  NOTE_MIN_WIDTH_CM,
+  NOTE_PASTEL_COLORS,
+  NOTE_SIZE_STEP_CM,
+  buildNoteSeedText,
+  noteCharsPerLine,
+  noteGeometry,
+  resolveNoteFontSize,
+} from '../utils/sideNotes';
 import {
   Truck,
   RotateCw,
@@ -24,6 +41,7 @@ import {
   Check,
   Printer,
   Download,
+  FileText,
 } from 'lucide-react';
 
 /** Scheda attiva nella sidebar: carico diretto (manuale) o stiva sequenziale. */
@@ -83,11 +101,29 @@ interface ControlDeckProps {
   onUpdateItemProperties: (target: string | string[], updates: Partial<PlacedItem>) => void;
   /** Motore di stiva sequenziale (multi-tappa): sostituisce o accoda i lotti. */
   onExecuteSequence: (batches: SequenceBatchItem[], mode: SequenceMode) => void;
+  /** Note laterali presenti sul pianale (corsia a destra della parete). */
+  notes: SideNote[];
+  /** Nota attualmente selezionata (null = pannello di modifica chiuso). */
+  selectedNoteId: string | null;
+  /** Crea una nota laterale (eredità automatica dal collo selezionato). */
+  onAddNote: (noteData: Omit<SideNote, 'id'>) => void;
+  onUpdateNote: (id: string, updates: Partial<SideNote>) => void;
+  onDeleteNote: (id: string) => void;
   selectedItems: PlacedItem[];
   items: PlacedItem[];
   /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
   labelDensity: LabelDensity;
 }
+
+/** Testo di partenza di una nota appena creata, da personalizzare. */
+const DEFAULT_NOTE_CONTENT = 'Inserisci nota operativa...';
+
+/** Etichette del selettore compatto di dimensione testo. */
+const NOTE_FONT_LABELS: Record<number, string> = {
+  9: 'A-',
+  11: 'A',
+  14: 'A+',
+};
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
   vehicle,
@@ -98,6 +134,11 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onClearAll,
   onUpdateItemProperties,
   onExecuteSequence,
+  notes,
+  selectedNoteId,
+  onAddNote,
+  onUpdateNote,
+  onDeleteNote,
   selectedItems,
   items,
   labelDensity,
@@ -143,7 +184,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     if (isCopying) return;
     setIsCopying(true);
 
-    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity);
+    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity, notes);
 
     setIsCopying(false);
     setCopyFeedback(copied ? 'copied' : 'downloaded');
@@ -169,6 +210,55 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     selectedItems.every((item) => item.color.toLowerCase() === selectedItems[0].color.toLowerCase())
       ? selectedItems[0].color.toLowerCase()
       : null;
+
+  /** Nota attualmente selezionata (pannello "Nota Laterale Selezionata"). */
+  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
+
+  /** Limiti fisici delle card di nota (cm): gli stessi applicati dalla maniglia. */
+  const clampNoteWidth = (value: number): number => {
+    const safe = Number.isFinite(value) && value > 0 ? value : NOTE_DEFAULT_WIDTH_CM;
+    return Math.max(NOTE_MIN_WIDTH_CM, Math.min(NOTE_MAX_WIDTH_CM, Math.round(safe)));
+  };
+  const clampNoteHeight = (value: number): number => {
+    const safe = Number.isFinite(value) && value > 0 ? value : NOTE_MIN_HEIGHT_CM;
+    return Math.max(NOTE_MIN_HEIGHT_CM, Math.min(NOTE_MAX_HEIGHT_CM, Math.round(safe)));
+  };
+
+  /**
+   * Geometria corrente della nota selezionata: fornisce l'altezza effettiva
+   * (auto-adattata al testo finché l'operatore non la fissa) e il corpo del
+   * testo realmente applicato nella card.
+   */
+  const selectedNoteGeometry = selectedNote ? noteGeometry(selectedNote) : null;
+  const noteFontSize = selectedNote ? resolveNoteFontSize(selectedNote) : NOTE_DEFAULT_FONT_SIZE;
+  /** Altezza mostrata nel campo H: quella esplicita, o quella misurata sul testo. */
+  const selectedNoteHeight = selectedNote
+    ? selectedNote.height ?? selectedNoteGeometry?.height ?? NOTE_MIN_HEIGHT_CM
+    : NOTE_MIN_HEIGHT_CM;
+
+  /**
+   * Crea una nota laterale a partire dai colli selezionati, con eredità
+   * automatica di quota, testo e colore:
+   * - `y`: quota minima Y della selezione (la nota si allinea alla loro altezza);
+   * - `content`: pre-popolato col nome del primo collo (es. `"PRODIVA 3S - "`),
+   *   già pronto per essere completato con l'avvertenza operativa;
+   * - `color`: l'esatto pastello di riempimento del collo selezionato;
+   * - `borderColor`: antracite tenue `#94A3B8`, `width`: 140 cm,
+   *   `fontSize`: 11 px (il testo si adatta al box).
+   */
+  const handleAddSideNote = () => {
+    if (selectedItems.length === 0) return;
+
+    const anchor = selectedItems[0];
+    onAddNote({
+      y: Math.min(...selectedItems.map((item) => item.y)),
+      content: buildNoteSeedText(anchor.name) || DEFAULT_NOTE_CONTENT,
+      color: anchor.color,
+      borderColor: NOTE_BORDER_COLOR,
+      width: NOTE_DEFAULT_WIDTH_CM,
+      fontSize: NOTE_DEFAULT_FONT_SIZE,
+    });
+  };
 
   /**
    * Matrice colori compatta 7 colonne (famiglie) × 3 righe (sfumature):
@@ -905,6 +995,171 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
               {isMultiSelection ? `Cancella (${selectedItems.length})` : 'Cancella'}
             </button>
           </div>
+
+          {/* Nota laterale con eredità automatica: quota, titolo e colore del
+              collo selezionato vengono copiati nella nuova annotazione. */}
+          <button
+            type="button"
+            id="btn-add-side-note"
+            onClick={handleAddSideNote}
+            title={`Crea una nota laterale alla quota Y = ${Math.min(
+              ...selectedItems.map((item) => item.y)
+            )} cm, col colore di ${selectedItems[0].name}`}
+            className="w-full bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1.5 shadow-sm transition"
+          >
+            <FileText className="w-3.5 h-3.5 text-slate-500" />
+            Aggiungi Nota Laterale
+          </button>
+        </div>
+      )}
+
+      {/* Pannello "Nota Laterale Selezionata": modifica titolo, testo e colore */}
+      {selectedNote && (
+        <div className="p-3 bg-slate-50 border border-slate-300 rounded-md space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-slate-500" />
+              Nota Laterale Selezionata
+            </span>
+            <span className="text-[10px] font-mono font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded tabular-nums">
+              Y {selectedNote.y.toFixed(1)} cm
+            </span>
+          </div>
+
+          {/* TESTO DELLA NOTA: unico campo libero multi-riga della card. */}
+          <label className="block space-y-1">
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Testo della Nota
+            </span>
+            <textarea
+              id="note-content-input"
+              value={selectedNote.content}
+              onChange={(e) => onUpdateNote(selectedNote.id, { content: e.target.value })}
+              rows={5}
+              placeholder="Scrivi avvertenze, cliente o note operative..."
+              className="w-full resize-y bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 leading-snug focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <span className="block text-[10px] text-slate-400 italic leading-snug">
+              Il testo va a capo da solo, su {noteCharsPerLine(selectedNote.width, noteFontSize)}{' '}
+              caratteri per riga con la dimensione attuale.
+            </span>
+          </label>
+
+          {/* Dimensione del testo: tre corpi ammessi (9 / 11 / 14 px). */}
+          <div className="space-y-1">
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Dimensione Testo
+            </span>
+            <div
+              role="group"
+              aria-label="Dimensione testo nota"
+              className="grid grid-cols-3 gap-1 rounded bg-slate-200/70 p-1"
+            >
+              {NOTE_FONT_SIZES.map((size) => {
+                const isActive = noteFontSize === size;
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    data-font-size={size}
+                    aria-pressed={isActive}
+                    title={`Corpo del testo ${size} px`}
+                    onClick={() => onUpdateNote(selectedNote.id, { fontSize: size })}
+                    className={`rounded px-1 py-1 leading-none transition ${
+                      isActive
+                        ? 'bg-white shadow-sm font-bold text-slate-800'
+                        : 'text-slate-500 hover:text-slate-700 font-medium'
+                    }`}
+                  >
+                    <span className={size === 9 ? 'text-[10px]' : size === 11 ? 'text-[12px]' : 'text-[14px]'}>
+                      {NOTE_FONT_LABELS[size]}
+                    </span>
+                    <span className="ml-1 text-[9px] font-mono">({size}px)</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Dimensioni della casella: larghezza e altezza in cm reali. */}
+          <div className="flex gap-2">
+            <label className="flex-1 space-y-1">
+              <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Larghezza (W cm)
+              </span>
+              <input
+                type="number"
+                id="note-width-input"
+                min={NOTE_MIN_WIDTH_CM}
+                max={NOTE_MAX_WIDTH_CM}
+                step={NOTE_SIZE_STEP_CM}
+                value={Math.round(selectedNote.width)}
+                onChange={(e) =>
+                  onUpdateNote(selectedNote.id, {
+                    width: clampNoteWidth(Number(e.target.value)),
+                  })
+                }
+                className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </label>
+
+            <label className="flex-1 space-y-1">
+              <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Altezza (H cm)
+              </span>
+              <input
+                type="number"
+                id="note-height-input"
+                min={NOTE_MIN_HEIGHT_CM}
+                max={NOTE_MAX_HEIGHT_CM}
+                step={NOTE_SIZE_STEP_CM}
+                value={Math.round(selectedNoteHeight)}
+                onChange={(e) =>
+                  onUpdateNote(selectedNote.id, {
+                    height: clampNoteHeight(Number(e.target.value)),
+                  })
+                }
+                className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </label>
+          </div>
+
+          {/* Palette rapida: 7 tinte pastello + bianco neutro */}
+          <div className="space-y-1">
+            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Colore Sfondo
+            </span>
+            <div className="flex items-center gap-1" role="group" aria-label="Colore nota laterale">
+              {NOTE_PASTEL_COLORS.map((hex) => {
+                const isActive = selectedNote.color.toLowerCase() === hex.toLowerCase();
+                return (
+                  <button
+                    key={hex}
+                    type="button"
+                    title={hex === '#FFFFFF' ? 'Bianco neutro' : `Sfondo ${hex}`}
+                    aria-label={hex === '#FFFFFF' ? 'Bianco neutro' : `Sfondo ${hex}`}
+                    aria-pressed={isActive}
+                    onClick={() => onUpdateNote(selectedNote.id, { color: hex })}
+                    className={`w-5 h-5 rounded-sm border border-slate-300 hover:scale-110 transition cursor-pointer ${
+                      isActive ? 'ring-2 ring-blue-600' : ''
+                    }`}
+                    style={{ backgroundColor: hex }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="btn-delete-note"
+            onClick={() => onDeleteNote(selectedNote.id)}
+            className="w-full bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-800 hover:text-red-900 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition"
+            title="Elimina la nota laterale (oppure premi Canc)"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-800" />
+            Cancella Nota
+          </button>
         </div>
       )}
 
@@ -932,18 +1187,53 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         </div>
       </div>
 
-      {/* Scorciatoie da Tastiera */}
-      <div className="mt-auto border-t border-slate-200 pt-3 text-[11px] text-slate-400 space-y-1">
-        <div className="flex items-center gap-1 font-bold text-slate-500">
-          <Info className="w-3.5 h-3.5" /> Scorciatoie:
+      {/* Scorciatoie da Tastiera — trigger compatto + popover fluttuante su hover */}
+      <div className="mt-auto border-t border-slate-200 pt-3 flex justify-between items-center relative">
+        <div className="relative group">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400 hover:text-slate-700 transition cursor-pointer select-none"
+          >
+            <Info className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600 transition" />
+            <span>Scorciatoie da tastiera</span>
+          </button>
+
+          {/* Popover fluttuante verso l'alto su hover */}
+          <div className="absolute bottom-full left-0 mb-2 w-72 bg-slate-900 text-slate-100 text-[11px] p-3 rounded-lg shadow-xl opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all duration-200 z-50 border border-slate-800 space-y-1.5">
+            <div className="font-bold text-white border-b border-slate-700 pb-1 mb-1.5 flex items-center gap-1.5">
+              <Info className="w-3.5 h-3.5 text-blue-400" />
+              <span>Guida Rapida Scorciatoie</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Ruota 90°</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Spazio</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Elimina collo / nota</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Canc</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Selezione multipla</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Ctrl / Cmd + Click</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Lasso di selezione</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Shift + Trascina</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Pan verticale (Cabina ↔ Porte)</span>
+              <span className="text-slate-400 font-mono text-[10px]">Rotellina</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Pan orizzontale</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Shift + Rotellina</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Zoom al cursore</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Ctrl / Cmd + Rotellina</kbd>
+            </div>
+          </div>
         </div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Spazio</kbd> : Ruota 90°</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Canc</kbd> : Elimina collo</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Ctrl</kbd>/<kbd className="bg-slate-100 px-1 rounded border">⌘</kbd>+<kbd className="bg-slate-100 px-1 rounded border">Click</kbd> : Selezione multipla</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Shift</kbd>+<kbd className="bg-slate-100 px-1 rounded border">Trascina</kbd> : Lasso di selezione</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Rotellina</kbd> : Pan verticale (Cabina ↔ Porte)</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Shift</kbd>+<kbd className="bg-slate-100 px-1 rounded border">Rotellina</kbd> : Pan orizzontale</div>
-        <div>• <kbd className="bg-slate-100 px-1 rounded border">Ctrl</kbd>+<kbd className="bg-slate-100 px-1 rounded border">Rotellina</kbd> : Zoom ancorato al cursore</div>
       </div>
     </div>
   );

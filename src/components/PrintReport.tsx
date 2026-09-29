@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { LabelDensity, PlacedItem, VehicleConfig } from '../types';
+import type { LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { PALLET_CATALOG, NOMINAL_QUOTA_CM, NOMINAL_QUOTA_COLOR } from '../constants';
 import { LDM_BADGE, LDM_BADGE_CENTER_X, LDM_BADGE_COLOR, LDM_BADGE_LEFT_X, LDM_BADGE_MUTED_COLOR, LDM_GUIDE_CLOSING_LENGTH, LDM_GUIDE_COLOR, LDM_GUIDE_DASH, ldmBadgeRightCenterX, ldmBadgeRightLeftX } from '../constants';
 import { calculateLdmMetrics } from '../utils/snapping';
-import { getPianoExtent } from '../utils/export';
+import { getPianoExtent, noteClipId } from '../utils/export';
+import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
 
 /* -------------------------------------------------------------------------- *
  *  SPRINT D — SCHEDA DI CARICO A4 / PDF
@@ -52,6 +53,10 @@ interface PrintSummaryRow {
   format: string;
   orientation: string;
   quantity: number;
+  /** Le note laterali non hanno formato/orientamento: la riga li lascia vuoti. */
+  isNote?: boolean;
+  /** Testo della nota, mostrato in sostituzione di formato e orientamento. */
+  noteText?: string;
 }
 
 /** Arrotonda a due decimali: attributi SVG compatti. */
@@ -87,9 +92,27 @@ const buildSummaryRows = (items: PlacedItem[]): PrintSummaryRow[] => {
   return Array.from(rows.values());
 };
 
+/**
+ * Righe di riepilogo delle note laterali di carico: una per nota, così le
+ * istruzioni operative restano nel documento anche quando il disegno è molto
+ * scalato (o con densità etichette `minimal`).
+ */
+const buildNoteRows = (notes: SideNote[]): PrintSummaryRow[] =>
+  notes.map((note) => ({
+    key: `note|${note.id}`,
+    client: 'Nota laterale',
+    format: `Y ${(note.y / 100).toFixed(2)} m`,
+    orientation: '',
+    quantity: 1,
+    isNote: true,
+    noteText: note.content.replace(/\s+/g, ' ').trim(),
+  }));
+
 interface PrintReportProps {
   vehicle: VehicleConfig;
   items: PlacedItem[];
+  /** Note laterali di carico: incluse nel disegno vettoriale della scheda. */
+  notes: SideNote[];
   /** Densità etichette dell'app: con `minimal` il disegno resta pulito. */
   labelDensity: LabelDensity;
 }
@@ -99,12 +122,18 @@ interface PrintReportProps {
  * centrato sull'altezza utile A4 e tabella riepilogo in calce.
  *
  * Il disegno riporta gli stessi riferimenti metrici del canvas a schermo:
- * quota nominale 13,20 m (sui mezzi che la raggiungono) e indicatori LDM
+ * quota nominale 13,20 m (sui mezzi che la raggiungono), indicatori LDM
  * calcolati dalla funzione condivisa `calculateLdmMetrics` (Regola della Corsia
- * di Parete). Il dato ufficiale dei metri lineari è inoltre esposto come riga
+ * di Parete) e le note laterali di carico nella loro corsia a destra della
+ * parete. Il dato ufficiale dei metri lineari è inoltre esposto come riga
  * dedicata nella tabella riassuntiva.
  */
-export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelDensity }) => {
+export const PrintReport: React.FC<PrintReportProps> = ({
+  vehicle,
+  items,
+  notes,
+  labelDensity,
+}) => {
   // Data/ora di generazione: aggiornata all'apertura della stampa del browser.
   const [generatedAt, setGeneratedAt] = useState<Date>(() => new Date());
 
@@ -114,8 +143,12 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
     return () => window.removeEventListener('beforeprint', refreshTimestamp);
   }, []);
 
-  const extent = getPianoExtent(vehicle, items, labelDensity);
+  const extent = getPianoExtent(vehicle, items, labelDensity, notes);
   const rows = buildSummaryRows(items);
+  /** Righe di riepilogo delle note laterali (titolo, quota e testo). */
+  const noteRows = buildNoteRows(notes);
+  /** Card delle note laterali, con la stessa geometria del canvas a schermo. */
+  const noteLayouts = resolveNoteLayouts(notes);
 
   /**
    * Ingombro LDM dei due lati (Regola della Corsia di Parete), dalla stessa
@@ -199,6 +232,9 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
             Lunghezza utile: {vehicle.length} cm — Larghezza utile: {vehicle.width} cm
           </div>
           <div className="font-mono font-bold">{items.length} colli caricati</div>
+          {notes.length > 0 && (
+            <div className="font-mono font-bold">{notes.length} note laterali</div>
+          )}
         </div>
       </header>
 
@@ -411,6 +447,52 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
             strokeDasharray="16 8"
           />
 
+          {/* Note laterali di carico: corsia dedicata a destra della parete,
+              stessa geometria del canvas a schermo e dello snapshot PNG. Ogni
+              card contiene l'unico testo della nota, a coordinate relative al
+              proprio box (`x = 10` cm), con la larghezza, l'altezza e il corpo
+              scelti dall'operatore. */}
+          {noteLayouts.map(
+            ({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
+              const text = (
+                <text
+                  x={NOTE_PADDING_CM}
+                  fontFamily={FONT_FAMILY}
+                  fontSize={round(fontSize)}
+                  fill={COLORS.dimensions}
+                >
+                  {lines.map((line, index) => (
+                    <tspan
+                      key={index}
+                      x={NOTE_PADDING_CM}
+                      y={round(firstBaselineCm + index * lineHeightCm)}
+                    >
+                      {line}
+                    </tspan>
+                  ))}
+                </text>
+              );
+
+              return (
+                <g key={note.id} transform={`translate(${round(extent.noteLaneX)}, ${round(note.y)})`}>
+                  <rect
+                    width={round(note.width)}
+                    height={round(height)}
+                    rx={4}
+                    fill={note.color}
+                    stroke={note.borderColor}
+                    strokeWidth={1}
+                  />
+                  {textHeight > height ? (
+                    <g clipPath={`url(#${noteClipId(note.id)})`}>{text}</g>
+                  ) : (
+                    text
+                  )}
+                </g>
+              );
+            }
+          )}
+
           {/* Intestazioni */}
           <text
             x={vehicle.width / 2}
@@ -486,6 +568,31 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
                 </tr>
               ))
             )}
+            {/* Note laterali di carico: istruzioni operative ufficiali del
+                documento, con titolo, quota e testo integrale. */}
+            {noteRows.length > 0 && (
+              <tr id="print-notes-header" className="bg-slate-100 text-[7.5pt] uppercase tracking-wider text-slate-600">
+                <td colSpan={4} className="border border-slate-300 px-1.5 py-1 font-bold">
+                  Note laterali di carico
+                </td>
+              </tr>
+            )}
+            {noteRows.map((row) => (
+              <tr key={row.key} id="print-note-row">
+                <td className="border border-slate-300 px-1.5 py-1 font-semibold text-slate-800">
+                  {row.client}
+                </td>
+                <td className="border border-slate-300 px-1.5 py-1 font-mono text-slate-700">
+                  {row.format}
+                </td>
+                <td
+                  colSpan={2}
+                  className="border border-slate-300 px-1.5 py-1 italic text-slate-700"
+                >
+                  {row.noteText || '—'}
+                </td>
+              </tr>
+            ))}
           </tbody>
           <tfoot>
             {/* Dato ufficiale LDM: riga dedicata ed evidenziata, calcolata dalla
