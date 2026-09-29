@@ -28,7 +28,6 @@ import {
   splitLabelIntoTwoLines,
 } from './labels';
 import {
-  NOTE_LANE_OFFSET_CM,
   NOTE_PADDING_CM,
   resolveNoteLayouts,
 } from './sideNotes';
@@ -62,16 +61,25 @@ const MAX_CANVAS_AREA = 64_000_000;
 export const BOTTOM_MARGIN_CM = 50;
 
 /** Padding del viewBox attorno al pianale, in centimetri reali. */
-const PADDING = { left: 26, right: 6, top: 38, bottom: 8 } as const;
+const PADDING = { left: 26, right: 6, top: 40, bottom: 8 } as const;
 
 /** Spazio minimo (cm) a sinistra per la dicitura della quota 13,20 m. */
 const NOMINAL_QUOTA_RESERVED_LEFT = 44;
 
 /**
- * Margine (cm) riservato a destra dopo la card di nota, così l'ultima
- * annotazione non tocca mai il bordo dell'immagine esportata.
+ * Margine minimo (cm) dell'inquadratura attorno al pianale, a sinistra e a
+ * destra: la scena contiene sempre il camion con un po' d'aria ai lati.
  */
-const NOTE_LANE_RIGHT_MARGIN_CM = 40;
+const SCENE_MARGIN_CM = 40;
+
+/**
+ * Stacco (cm) dell'inquadratura dall'ingombro **reale** della scena (colli e
+ * note): l'immagine non tocca mai il bordo dell'ultimo elemento disegnato.
+ */
+const SCENE_PADDING_CM = 20;
+
+/** Bordo superiore dell'inquadratura (cm): spazio per la scritta `▲ CABINA ▲`. */
+const SCENE_TOP_CM = -40;
 
 /** Corpi testo (cm reali), allineati al rendering del canvas a schermo. */
 const FONT = {
@@ -109,12 +117,13 @@ const MONO_FONT_FAMILY = 'SFMono-Regular, Menlo, Consolas, monospace';
 const FALLBACK_FILE_NAME = 'piano-di-carico.png';
 
 /**
- * Ingombro vettoriale completo del pianale, in centimetri reali.
- * Include l'eventuale sforamento posteriore dei colli oltre le porte e la
- * corsia delle note laterali quando sono presenti.
+ * Ingombro vettoriale completo della scena, in centimetri reali.
+ * Include l'eventuale sforamento posteriore dei colli oltre le porte e **tutte**
+ * le note laterali, ovunque siano state posizionate (a sinistra del rimorchio, a
+ * destra o in coda).
  */
 export interface PianoExtent {
-  /** Bordo sinistro del viewBox (negativo: spazio per le tacche metriche). */
+  /** Bordo sinistro del viewBox (negativo: righello metrico e note a sinistra). */
   minX: number;
   /** Bordo superiore del viewBox (negativo: spazio per la scritta CABINA). */
   minY: number;
@@ -122,14 +131,12 @@ export interface PianoExtent {
   width: number;
   /** Altezza totale del viewBox (cm). */
   height: number;
-  /** Y (cm) dell'ultimo collo, sforamento posteriore incluso (+50 cm di margine). */
+  /** Y (cm) dell'ultimo elemento, sforamento posteriore incluso (+50 cm). */
   contentBottom: number;
   /** Y (cm) della linea tratteggiata delle porte posteriori. */
   doorLine: number;
   /** Y (cm) della didascalia "PORTE POSTERIORI". */
   doorLabelY: number;
-  /** Ascissa (cm) della corsia delle note laterali (a destra della parete). */
-  noteLaneX: number;
 }
 
 /** Snapshot SVG autonomo + dimensioni in px CSS dell'immagine finale. */
@@ -143,19 +150,18 @@ export interface PianoSnapshot {
 }
 
 /**
- * Calcola l'ingombro del pianale da esportare.
+ * Calcola l'ingombro della scena da esportare, con **inquadratura dinamica 2D**.
  *
- * L'altezza include anche gli eventuali colli che sforano dalle porte
- * posteriori, così nessun bancale viene tagliato nell'immagine:
- * `maxY = max(vehicle.length, ...items.map(i => i.y + i.length)) + 50`.
+ * L'altezza include gli eventuali colli che sforano dalle porte posteriori e il
+ * fondo di ogni card di nota:
+ * `maxY = max(vehicle.length, ...items.y + items.length, ...notes.y + note.height) + 50`.
  *
- * Se sono presenti **note laterali** la larghezza del viewBox viene allargata
- * sul lato destro per includere l'intera corsia note
- * (`vehicle.width + 30 + 140 + 40` ≈ 460 cm totali, contro i 374 cm del caso
- * simmetrico senza note). Senza note tutto resta esattamente come prima.
- *
- * Con densità etichette `minimal` l'immagine resta volutamente pulita: nessuna
- * linea guida e nessun badge LDM, quindi nessuno spazio riservato ai lati.
+ * La larghezza include **tutte** le note, a qualunque ascissa:
+ * `minX = min(-40, ...notes.x) - 20` e `maxX = max(vehicle.width + 40, ...notes.x + notes.width) + 20`,
+ * uniti agli spazi già riservati ai righelli (quote metriche, quota 13,20 m,
+ * badge LDM) perché nulla venga mai tagliato. Una nota trascinata a sinistra del
+ * camion (`x < 0`) allarga quindi l'immagine verso sinistra, una nota in coda la
+ * allunga verso il basso.
  *
  * @param vehicle      Configurazione del mezzo (dimensioni utili in cm)
  * @param items        Colli stivati sul pianale
@@ -168,21 +174,31 @@ export const getPianoExtent = (
   labelDensity: LabelDensity = 'all',
   notes: SideNote[] = []
 ): PianoExtent => {
-  const maxItemBottom = Math.max(vehicle.length, ...items.map((item) => item.y + item.length));
+  // Geometria reale delle card: altezza fissata dall'operatore o auto-adattata.
+  const noteLayouts = notes.length > 0 ? resolveNoteLayouts(notes) : [];
 
-  // Le card di nota possono scendere sotto l'ultimo collo: il viewBox deve
-  // allungarsi per contenerle per intero, altrimenti verrebbero tagliate.
-  const hasNotes = notes.length > 0;
-  const noteLayouts = hasNotes ? resolveNoteLayouts(notes) : [];
-  const maxNoteBottom = noteLayouts.reduce(
-    (max, layout) => Math.max(max, layout.note.y + layout.height),
-    0
-  );
-  const maxY = Math.max(maxItemBottom, maxNoteBottom) + BOTTOM_MARGIN_CM;
+  // Ingombro verticale della scena: pianale, colli (sforamento incluso) e note.
+  const maxY =
+    Math.max(
+      vehicle.length,
+      ...items.map((item) => item.y + item.length),
+      ...noteLayouts.map((layout) => layout.note.y + layout.height)
+    ) + BOTTOM_MARGIN_CM;
+
+  // Ingombro orizzontale reale della scena: il pianale e tutte le note, dove sono.
+  const sceneMinX =
+    Math.min(-SCENE_MARGIN_CM, ...notes.map((note) => note.x)) - SCENE_PADDING_CM;
+  const sceneMaxX =
+    Math.max(
+      vehicle.width + SCENE_MARGIN_CM,
+      ...notes.map((note) => note.x + note.width)
+    ) + SCENE_PADDING_CM;
 
   // Didascalia delle porte: sotto il pianale, oppure sotto l'eventuale sforamento.
   const hasOverhang = items.some((item) => item.y + item.length > vehicle.length);
-  const doorLabelY = hasOverhang ? Math.max(...items.map((item) => item.y + item.length)) + 18 : vehicle.length + 24;
+  const doorLabelY = hasOverhang
+    ? Math.max(...items.map((item) => item.y + item.length)) + 18
+    : vehicle.length + 24;
 
   // Contatore LDM e quota nominale hanno bisogno di spazio nel righello sinistro.
   // Con densità `minimal` il contatore non viene disegnato: nessuno spazio extra.
@@ -198,24 +214,25 @@ export const getPianoExtent = (
   // Badge LDM del lato destro: vive FUORI dalla parete destra, quindi con un
   // carico asimmetrico il viewBox deve riservare spazio anche a destra.
   const needsRightLdmBadge = hasLdmBadge && ldm.isAsymmetric;
-  // Corsia note: 30 cm di stacco + la card più larga scelta dall'operatore
-  // (le note sono ridimensionabili) + 40 cm di margine di sicurezza.
-  const widestNote = notes.reduce((max, note) => Math.max(max, note.width), 0);
   const rightPadding = Math.max(
     PADDING.right,
-    needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0,
-    hasNotes ? NOTE_LANE_OFFSET_CM + widestNote + NOTE_LANE_RIGHT_MARGIN_CM : 0
+    needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0
   );
 
+  // Inquadratura finale: unione tra l'ingombro reale della scena (note comprese)
+  // e gli spazi riservati ai righelli. Nessun elemento può restare fuori.
+  const minX = Math.min(-leftPadding, sceneMinX);
+  const maxX = Math.max(vehicle.width + rightPadding, sceneMaxX);
+  const minY = SCENE_TOP_CM;
+
   return {
-    minX: -leftPadding,
-    minY: -PADDING.top,
-    width: vehicle.width + leftPadding + rightPadding,
-    height: PADDING.top + maxY + PADDING.bottom,
+    minX,
+    minY,
+    width: maxX - minX,
+    height: -minY + maxY + PADDING.bottom,
     contentBottom: maxY,
     doorLine: vehicle.length,
     doorLabelY,
-    noteLaneX: vehicle.width + NOTE_LANE_OFFSET_CM,
   };
 };
 
@@ -345,19 +362,20 @@ const renderItem = (
 export const noteClipId = (noteId: string): string => `note-clip-${noteId}`;
 
 /**
- * Corsia delle note laterali nello snapshot SVG: una card per nota, alla stessa
- * ascissa (`vehicle.width + 30 cm`) e con la stessa geometria del canvas a
- * schermo, così l'immagine condivisa su WhatsApp riporta le istruzioni
- * operative esattamente come le vede il disponente.
+ * Note laterali nello snapshot SVG: una card per nota, **alle proprie coordinate
+ * 2D** (`note.x`, `note.y` in cm reali) e con la stessa geometria del canvas a
+ * schermo, così l'immagine condivisa su WhatsApp riporta le istruzioni operative
+ * esattamente dove le ha posizionate il disponente (a destra del camion, a
+ * sinistra, lungo il pianale o in coda).
  *
  * Ogni card contiene un **unico testo** (`content`) mandato a capo in `<tspan>`
  * a coordinate relative all'origine del box (`x = 10` cm): larghezza, altezza e
- * corpo del testo sono quelli scelti dall'operatore.
+ * corpo del testo sono quelli scelti dall'operatore. **Nessun bordo**: lo
+ * snapshot non ha selezione, quindi la card è puro testo fluttuante.
  *
  * @param notes Note da disegnare, nell'ordine di creazione
- * @param laneX Ascissa (cm) della corsia note
  */
-const renderNotes = (notes: SideNote[], laneX: number): string => {
+const renderNotes = (notes: SideNote[]): string => {
   const layouts = resolveNoteLayouts(notes);
 
   // Clip solo dove serve: un box più basso del testo (altezza fissata a mano)
@@ -391,10 +409,10 @@ const renderNotes = (notes: SideNote[], laneX: number): string => {
       )}" fill="${COLORS.dimensions}">${body}</text>`;
 
       return [
-        `<g transform="translate(${round(laneX)}, ${round(note.y)})">`,
+        `<g transform="translate(${round(note.x)}, ${round(note.y)})">`,
         `<rect width="${round(note.width)}" height="${round(
           height
-        )}" rx="4" fill="${note.color}" stroke="${note.borderColor}" stroke-width="1"/>`,
+        )}" rx="4" fill="${note.color}"/>`,
         textHeight > height
           ? `<g clip-path="url(#${noteClipId(note.id)})">${text}</g>`
           : text,
@@ -413,9 +431,9 @@ const renderNotes = (notes: SideNote[], laneX: number): string => {
  * sfondo bianco, piano di carico, tacche metriche ogni metro, quota nominale
  * 13,20 m (sui mezzi che la raggiungono), linea guida e badge del contatore
  * dinamico LDM, tutti i colli con colore/bordo/testo ritagliato dal proprio
- * clipPath, la corsia delle note laterali (se presenti), sponde laterali,
- * parete Cabina, linea tratteggiata delle porte posteriori e didascalie.
- * Nessun elemento di interfaccia.
+ * clipPath, le note laterali **alle loro coordinate 2D** (se presenti), sponde
+ * laterali, parete Cabina, linea tratteggiata delle porte posteriori e
+ * didascalie. Nessun elemento di interfaccia.
  *
  * @param vehicle      Configurazione del mezzo
  * @param items        Colli stivati
@@ -562,9 +580,9 @@ export const buildPianoSvg = (
   // Colli stivati: colore, bordo e testo formattato secondo la densità.
   for (const item of items) parts.push(renderItem(item, items, vehicle, labelDensity));
 
-  // Note laterali di carico: stessa corsia del canvas a schermo, a destra della
-  // parete del semirimorchio. Nessun contorno blu di selezione nell'export.
-  if (notes.length > 0) parts.push(renderNotes(notes, extent.noteLaneX));
+  // Note laterali di carico: alle proprie coordinate 2D, anche a sinistra del
+  // semirimorchio. Nessun contorno (né blu di selezione né bordo a riposo).
+  if (notes.length > 0) parts.push(renderNotes(notes));
 
   // Sponde laterali e parete Cabina.
   parts.push(

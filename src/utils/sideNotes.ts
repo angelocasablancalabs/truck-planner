@@ -3,21 +3,24 @@ import type { SideNote } from '../types';
 /* -------------------------------------------------------------------------- *
  *  NOTE LATERALI DI CARICO (SIDE ANNOTATIONS) — geometria e testo condivisi
  *
- *  Le note vivono in una corsia dedicata a DESTRA della parete del
- *  semirimorchio: non occupano mai il pianale utile e non entrano nel calcolo
- *  dei metri lineari. Questo modulo è l'unica fonte di verità della loro
+ *  Le note sono posizionate **liberamente in 2D** (`x`, `y` in cm reali): di
+ *  default nascono subito a destra della parete del semirimorchio
+ *  (`x = vehicle.width + 30`), ma possono essere trascinate ovunque attorno al
+ *  camion — anche a sinistra di esso (`x < 0`) o in coda — senza mai entrare nel
+ *  calcolo dei metri lineari. Questo modulo è l'unica fonte di verità della loro
  *  geometria, così canvas a schermo (`TruckCanvas.tsx`), snapshot PNG
  *  (`utils/export.ts`) e scheda di stampa A4 (`components/PrintReport.tsx`)
  *  restano perfettamente coerenti.
  *
  *  Ogni nota è un **unico testo libero** (`content`) racchiuso nel proprio
  *  rettangolo: la larghezza (`width`), l'altezza (`height`) e il corpo del testo
- *  (`fontSize`) sono scelti dall'operatore e valgono identici nelle tre rese.
+ *  (`fontSize`, scala 11 / 14 / 18 px) sono scelti dall'operatore e valgono
+ *  identici nelle tre rese.
  *
  *  Tutte le quote sono in CENTIMETRI REALI (unità del mondo vettoriale).
  * -------------------------------------------------------------------------- */
 
-/** Offset (cm) della corsia note dalla parete destra del semirimorchio. */
+/** Offset (cm) della corsia note dalla parete destra: posizione di NASCITA. */
 export const NOTE_LANE_OFFSET_CM = 30;
 
 /** Larghezza di default della card di nota (cm). */
@@ -48,32 +51,35 @@ export const NOTE_SIZE_STEP_CM = 5;
  */
 export const NOTE_PADDING_CM = 10;
 
-/** Spazio (cm) tra card adiacenti della stessa corsia (anti-sovrapposizione). */
+/** Spazio (cm) tra card adiacenti quando una nuova nota cerca posto libero. */
 export const NOTE_STACK_GAP_CM = 6;
 
-/** Passo verticale (cm) della riga di testo con il corpo di default (11 px). */
-export const NOTE_LINE_HEIGHT_CM = 14;
-
-/** Baseline (cm) della prima riga con il corpo di default (11 px). */
-export const NOTE_TEXT_TOP_CM = 18;
-
-/** Corpi testo ammessi per una nota laterale (px). */
-export const NOTE_FONT_SIZES = [9, 11, 14] as const;
-
-/** Corpo di default di una nota laterale (px). */
-export const NOTE_DEFAULT_FONT_SIZE = 11;
-
-/** Limiti di sicurezza del corpo testo (px). */
-export const NOTE_MIN_FONT_SIZE = 6;
-export const NOTE_MAX_FONT_SIZE = 18;
+/**
+ * Passo verticale di una riga di testo, in em rispetto al corpo scelto
+ * (`noteLineHeightCm(11) = 13,97 cm`, `noteLineHeightCm(14) = 17,78 cm`,
+ * `noteLineHeightCm(18) = 22,86 cm`).
+ */
+export const NOTE_LINE_HEIGHT_EM = 1.27;
 
 /**
- * Corpo massimo che entra in una card larga `width` cm, in px: derivato dalla
- * larghezza media di un glifo, serve solo a impedire che una card molto stretta
- * (es. 70 cm) renda il testo illeggibile o sbordante.
+ * Baseline della prima riga, in em rispetto al corpo scelto
+ * (`noteFirstBaselineCm(11) = 18,04 cm`, `noteFirstBaselineCm(14) = 22,96 cm`,
+ * `noteFirstBaselineCm(18) = 29,52 cm`).
  */
-export const maxNoteFontSizeForWidth = (width: number): number =>
-  Math.max(NOTE_MIN_FONT_SIZE, width / 10);
+export const NOTE_FIRST_BASELINE_EM = 1.64;
+
+/** Scala dei corpi testo ammessi per una nota laterale (px). */
+export const NOTE_FONT_SIZES = [11, 14, 18] as const;
+
+/** Corpo di default di una nota laterale (px): la taglia "Media" `A`. */
+export const NOTE_DEFAULT_FONT_SIZE = 14;
+
+/** Limiti di sicurezza del corpo testo (px), coincidenti con la scala ufficiale. */
+export const NOTE_MIN_FONT_SIZE = 11;
+export const NOTE_MAX_FONT_SIZE = 18;
+
+/** Battute minime per riga garantite anche sulla card più stretta (70 cm). */
+export const NOTE_MIN_CHARS_PER_LINE = 4;
 
 /**
  * Larghezza media di un glifo in em, usata per stimare quante battute entrano
@@ -89,6 +95,18 @@ export const NOTE_CHAR_WIDTH_EM = 0.56;
  * lettera della riga non tocchi mai il bordo della card.
  */
 export const NOTE_WRAP_SAFETY = 0.94;
+
+/**
+ * Corpo massimo che entra in una card larga `width` cm, in px: derivato dal
+ * numero minimo di battute per riga (`NOTE_MIN_CHARS_PER_LINE`). Con la
+ * larghezza minima di 70 cm il tetto è ~23 px, quindi **non** intacca mai la
+ * scala ufficiale 11 / 14 / 18 px: interviene solo su valori fuori scala.
+ */
+export const maxNoteFontSizeForWidth = (width: number): number => {
+  const availableCm = Math.max(10, width - 2 * NOTE_PADDING_CM);
+  const minPerChar = NOTE_MIN_CHARS_PER_LINE * NOTE_CHAR_WIDTH_EM * NOTE_WRAP_SAFETY;
+  return Math.max(NOTE_MIN_FONT_SIZE, availableCm / minPerChar);
+};
 
 /** Dimensione misurata della card: altezza, righe di testo e corpo applicato. */
 export interface NoteGeometry {
@@ -109,27 +127,35 @@ export interface NoteGeometry {
 }
 
 /**
- * Altezza (cm) di una riga di testo, proporzionale al corpo scelto: il passo
- * storico di 14 cm vale per il corpo di default di 11 px.
+ * Altezza (cm) di una riga di testo, proporzionale al corpo scelto
+ * (`NOTE_LINE_HEIGHT_EM` em): alla scala ufficiale 11 / 14 / 18 px il passo vale
+ * 13,97 / 17,78 / 22,86 cm.
  */
-export const noteLineHeightCm = (fontSize: number): number =>
-  (NOTE_LINE_HEIGHT_CM * fontSize) / NOTE_DEFAULT_FONT_SIZE;
+export const noteLineHeightCm = (fontSize: number): number => fontSize * NOTE_LINE_HEIGHT_EM;
 
 /** Baseline (cm) della prima riga, relativa all'origine del box. */
 export const noteFirstBaselineCm = (fontSize: number): number =>
-  (NOTE_TEXT_TOP_CM * fontSize) / NOTE_DEFAULT_FONT_SIZE;
+  fontSize * NOTE_FIRST_BASELINE_EM;
+
+/**
+ * Sottoinsieme di `SideNote` sufficiente a calcolare testo e geometria della
+ * card: consente di misurare anche una nota ancora in fase di bozza (senza ID né
+ * quote definitive), come accade allo spawn o nel pannello della sidebar.
+ */
+export type NoteGeometryInput = Pick<SideNote, 'content' | 'width'> &
+  Partial<Pick<SideNote, 'height' | 'fontSize'>>;
 
 /**
  * Corpo del testo realmente applicabile nella card: il valore scelto
- * dall'operatore (9 / 11 / 14 px) viene solo limitato perché il testo possa
- * entrare nella larghezza disponibile, senza mai riscriverlo al ribasso in
- * modo arbitrario.
+ * dall'operatore (11 / 14 / 18 px) viene solo limitato perché il testo possa
+ * entrare nella larghezza disponibile, senza mai riscriverlo al ribasso in modo
+ * arbitrario.
  */
-export const resolveNoteFontSize = (note: SideNote): number => {
+export const resolveNoteFontSize = (note: NoteGeometryInput): number => {
   const requested = Number(note.fontSize) || NOTE_DEFAULT_FONT_SIZE;
   const clamped = Math.max(NOTE_MIN_FONT_SIZE, Math.min(NOTE_MAX_FONT_SIZE, requested));
-  // I corpi 9 / 11 / 14 px sono sempre rispettati alla larghezza di default
-  // (140 cm); il tetto entra in gioco solo su card molto strette.
+  // I corpi 11 / 14 / 18 px sono sempre rispettati alla larghezza di default
+  // (140 cm); il tetto entra in gioco solo su valori fuori scala.
   return Math.min(clamped, maxNoteFontSizeForWidth(note.width));
 };
 
@@ -197,7 +223,7 @@ export const wrapNoteText = (text: string, maxChars: number): string[] => {
  * - **Testo**: mandato a capo su `noteCharsPerLine(width, fontSize)` caratteri,
  *   con il corpo scelto dall'operatore.
  */
-export const noteGeometry = (note: SideNote): NoteGeometry => {
+export const noteGeometry = (note: NoteGeometryInput): NoteGeometry => {
   const fontSize = resolveNoteFontSize(note);
   const maxChars = noteCharsPerLine(note.width, fontSize);
   const lines = wrapNoteText(note.content, maxChars);
@@ -227,47 +253,59 @@ export const noteGeometry = (note: SideNote): NoteGeometry => {
 };
 
 /**
- * Posiziona le card nella corsia note, tutte alla stessa ascissa
- * (`vehicle.width + NOTE_LANE_OFFSET_CM`), spingendo verso il basso solo le
- * note che si sovrappongono davvero.
+ * Geometria delle card di nota, nell'ordine di creazione.
  *
- * La quota Y resta quella scelta dall'operatore (o ereditata dai colli
- * selezionati); l'eventuale scostamento verticale è una mera risoluzione di
- * collisione grafica, quindi nessuna nota viene mai invalidata: il testo è
- * libero di eccedere l'altezza del mezzo e resta comunque nella propria corsia.
+ * Il posizionamento è **liberamente 2D** (`note.x`, `note.y` in cm reali): ogni
+ * nota conserva esattamente le coordinate scelte dall'operatore, quindi la
+ * funzione non sposta né riallinea nulla — si limita a misurarne il testo e
+ * l'altezza reale. Eventuali sovrapposizioni sono una scelta dell'operatore,
+ * non una condizione da correggere d'ufficio (l'anti-sovrapposizione vive solo
+ * allo spawn di una nuova nota, in `findFreeNoteY`).
  *
- * @param notes Note da disporre, nell'ordine di creazione
+ * @param notes Note da misurare, nell'ordine di creazione
  * @returns Array di `{ note, height, lines, ... }` allineato all'input
  */
 export const resolveNoteLayouts = (
   notes: SideNote[]
-): (NoteGeometry & { note: SideNote })[] => {
-  const layouts = notes.map((note) => ({ note, ...noteGeometry(note) }));
-  const placed: { top: number; bottom: number }[] = [];
+): (NoteGeometry & { note: SideNote })[] =>
+  notes.map((note) => ({ note, ...noteGeometry(note) }));
 
-  for (const layout of layouts) {
-    const startY = layout.note.y;
-    let top = startY;
+/**
+ * Quota Y libera più vicina a quella richiesta per una **nuova** nota: scorre
+ * verso il basso finché il rettangolo non tocca nessuna card esistente
+ * (`NOTE_STACK_GAP_CM` di stacco). Serve solo a evitare che due note create di
+ * seguito nascano una sopra l'altra: le note già piazzate non vengono **mai**
+ * spostate d'ufficio, perché il posizionamento 2D è interamente in mano
+ * all'operatore.
+ *
+ * @param notes    Note già presenti sul pianale
+ * @param position posizione desiderata della nuova card (cm reali)
+ * @param draft    contenuto e larghezza della nuova card (per misurarne l'altezza)
+ */
+export const findFreeNoteY = (
+  notes: SideNote[],
+  position: { x: number; y: number },
+  draft: NoteGeometryInput
+): number => {
+  const obstacles = resolveNoteLayouts(notes);
+  const width = draft.width;
+  const height = noteGeometry(draft).height;
+  let top = position.y;
 
-    // Spinta verso il basso finché la card non trova posto libero (il contatto
-    // a filo bordo non è una sovrapposizione: le card restano accostate).
-    let moved = true;
-    while (moved) {
-      moved = false;
-      for (const other of placed) {
-        const overlaps = top < other.bottom && other.top < top + layout.height;
-        if (overlaps) {
-          top = other.bottom + NOTE_STACK_GAP_CM;
-          moved = true;
-        }
+  let moved = true;
+  while (moved) {
+    moved = false;
+    for (const { note, height: otherHeight } of obstacles) {
+      const overlapsX = position.x < note.x + note.width && note.x < position.x + width;
+      const overlapsY = top < note.y + otherHeight && note.y < top + height;
+      if (overlapsX && overlapsY) {
+        top = note.y + otherHeight + NOTE_STACK_GAP_CM;
+        moved = true;
       }
     }
-
-    placed.push({ top, bottom: top + layout.height });
-    layout.note = top === startY ? layout.note : { ...layout.note, y: top };
   }
 
-  return layouts;
+  return Math.max(0, Math.round(top * 100) / 100);
 };
 
 /**
@@ -285,7 +323,8 @@ export const NOTE_PASTEL_COLORS: string[] = [
   '#FFFFFF', // Bianco neutro
 ];
 
-/** Bordi ammessi per la card: antracite (eredità) o grigio chiaro. */
+/** Bordi storici della card: non più disegnati a riposo ("zero bordi"), restano
+ *  come metadato e per future evidenziazioni. */
 export const NOTE_BORDER_COLOR = '#94A3B8';
 export const NOTE_BORDER_COLOR_SOFT = '#CBD5E1';
 
@@ -294,6 +333,21 @@ export const NOTE_RESIZE_HANDLE_COLOR = '#2563EB';
 
 /** Lato (cm) della maniglia di resize disegnata nell'angolo basso-destro. */
 export const NOTE_RESIZE_HANDLE_SIZE_CM = 8;
+
+/**
+ * Semiampiezza (cm) dello spazio di lavoro 2D attorno al pianale: una nota può
+ * essere trascinata molto a sinistra (`X < 0`), oltre la parete destra, sopra la
+ * Cabina o in coda, ma non all'infinito — così non può mai perdersi fuori scena.
+ */
+export const NOTE_WORKSPACE_MARGIN_CM = 600;
+
+/** Ascissa minima (cm) consentita all'origine di una nota. */
+export const noteMinX = (vehicleWidth: number): number =>
+  -(vehicleWidth + NOTE_WORKSPACE_MARGIN_CM);
+
+/** Ascissa massima (cm) consentita all'origine di una nota. */
+export const noteMaxX = (vehicleWidth: number): number =>
+  vehicleWidth + NOTE_WORKSPACE_MARGIN_CM;
 
 /**
  * Testo di partenza di una nota creata dai colli selezionati: il nome del primo

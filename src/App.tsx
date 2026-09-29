@@ -291,10 +291,17 @@ export default function App() {
     setSelectedNoteId(null);
   }, []);
 
-  /** Trascinamento lungo l'asse Y (Cabina → Porte) della corsia note. */
-  const handleUpdateNotePos = useCallback((id: string, y: number) => {
+  /**
+   * Trascinamento libero in 2D di una nota: si aggiornano **sia** l'ascissa X sia
+   * la quota Y (cm reali), così la card può vivere ovunque attorno al camion —
+   * a destra della parete (posizione di nascita), a sinistra (`x < 0`), lungo il
+   * pianale o in coda. I limiti di sicurezza sono applicati dal canvas.
+   */
+  const handleUpdateNotePos = useCallback((id: string, x: number, y: number) => {
     setNotes((prev) =>
-      prev.map((note) => (note.id === id ? { ...note, y: toPrecision(y) } : note))
+      prev.map((note) =>
+        note.id === id ? { ...note, x: toPrecision(x), y: toPrecision(y) } : note
+      )
     );
   }, []);
 

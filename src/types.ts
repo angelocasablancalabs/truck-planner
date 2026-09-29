@@ -53,28 +53,36 @@ export type LabelDensity = 'all' | 'client' | 'dimensions' | 'minimal';
 /**
  * Nota laterale di carico (Side Annotation).
  *
- * Il disponente la posiziona a fianco di uno specifico gruppo di bancali per
+ * Il disponente la posiziona **liberamente in 2D** attorno al pianale per
  * tramandare istruzioni operative e avvertenze (es. "bancali poco stabili, fare
- * attenzione durante il carico!"). La nota vive in una corsia dedicata a destra
- * della parete del semirimorchio e viene riportata automaticamente sia nello
- * snapshot PNG ad alta risoluzione sia nella scheda di carico A4 in PDF.
+ * attenzione durante il carico!"). Una nota può stare a destra del semirimorchio
+ * (posizione di default), a sinistra di esso (`x < 0`), in coda o sopra il
+ * pianale: l'inquadratura dello snapshot PNG e della scheda A4 si allarga da
+ * sola per contenerla.
+ *
+ * A riposo la card **non ha alcun bordo** (puro testo fluttuante): il contorno
+ * blu di selezione compare solo quando la nota è attiva.
  */
 export interface SideNote {
   id: string;
+  /** Posizione X in cm: 0 = parete sinistra, vehicle.width = parete destra.
+   *  Può essere negativa (a sinistra del rimorchio) o oltre la parete destra. */
+  x: number;
   /** Quota Y in cm lungo il camion (0 = Cabina, vehicle.length = Porte). */
   y: number;
   /** Testo unico della nota (multi-riga): nessun titolo separato. */
   content: string;
   /** Sfondo pastello della card (ereditato dal collo selezionato, o bianco). */
   color: string;
-  /** Colore del bordo della card (#94A3B8 oppure #334155). */
+  /** Colore del bordo storico della card: non più disegnato a riposo (sezione
+   *  "zero bordi"), resta come metadato per future evidenziazioni. */
   borderColor: string;
   /** Larghezza in cm (default 140, min 70, max 300). */
   width: number;
   /** Altezza esplicita in cm (se ridimensionata dalla maniglia, min 40). */
   height?: number;
-  /** Dimensione del font in px (9, 11 o 14; default 11). */
-  fontSize?: number;
+  /** Dimensione del font in px (11, 14 o 18; default 14). */
+  fontSize?: 11 | 14 | 18 | number;
 }
 
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */

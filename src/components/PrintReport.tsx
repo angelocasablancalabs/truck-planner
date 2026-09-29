@@ -62,6 +62,13 @@ interface PrintSummaryRow {
 /** Arrotonda a due decimali: attributi SVG compatti. */
 const round = (value: number): number => Math.round(value * 100) / 100;
 
+/**
+ * ID del `clipPath` di una nota nella scheda stampata: la scheda vive nello
+ * stesso documento del canvas, quindi il prefisso evita di collidere con il
+ * `clipPath` omonimo disegnato dal canvas a schermo.
+ */
+const printNoteClipId = (noteId: string): string => `print-${noteClipId(noteId)}`;
+
 /** Tronca il testo perché non esca dal rettangolo del collo. */
 const truncateToWidth = (text: string, maxWidthCm: number, fontSizeCm: number): string => {
   const maxChars = Math.max(1, Math.floor(maxWidthCm / (fontSizeCm * 0.58)));
@@ -95,13 +102,15 @@ const buildSummaryRows = (items: PlacedItem[]): PrintSummaryRow[] => {
 /**
  * Righe di riepilogo delle note laterali di carico: una per nota, così le
  * istruzioni operative restano nel documento anche quando il disegno è molto
- * scalato (o con densità etichette `minimal`).
+ * scalato (o con densità etichette `minimal`). La posizione riportata è quella
+ * **2D** scelta dall'operatore (`X` e `Y` in metri, con X negativa quando la
+ * nota vive a sinistra del semirimorchio).
  */
 const buildNoteRows = (notes: SideNote[]): PrintSummaryRow[] =>
   notes.map((note) => ({
     key: `note|${note.id}`,
     client: 'Nota laterale',
-    format: `Y ${(note.y / 100).toFixed(2)} m`,
+    format: `X ${(note.x / 100).toFixed(2)} m · Y ${(note.y / 100).toFixed(2)} m`,
     orientation: '',
     quantity: 1,
     isNote: true,
@@ -447,11 +456,13 @@ export const PrintReport: React.FC<PrintReportProps> = ({
             strokeDasharray="16 8"
           />
 
-          {/* Note laterali di carico: corsia dedicata a destra della parete,
-              stessa geometria del canvas a schermo e dello snapshot PNG. Ogni
-              card contiene l'unico testo della nota, a coordinate relative al
-              proprio box (`x = 10` cm), con la larghezza, l'altezza e il corpo
-              scelti dall'operatore. */}
+          {/* Note laterali di carico: alle loro coordinate 2D (a destra del
+              camion, a sinistra, lungo il pianale o in coda), con la stessa
+              geometria del canvas a schermo e dello snapshot PNG. Ogni card
+              contiene l'unico testo della nota, a coordinate relative al proprio
+              box (`x = 10` cm), con la larghezza, l'altezza e il corpo scelti
+              dall'operatore. **Nessun bordo**: in scheda la nota è puro testo
+              fluttuante. */}
           {noteLayouts.map(
             ({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
               const text = (
@@ -474,20 +485,29 @@ export const PrintReport: React.FC<PrintReportProps> = ({
               );
 
               return (
-                <g key={note.id} transform={`translate(${round(extent.noteLaneX)}, ${round(note.y)})`}>
-                  <rect
-                    width={round(note.width)}
-                    height={round(height)}
-                    rx={4}
-                    fill={note.color}
-                    stroke={note.borderColor}
-                    strokeWidth={1}
-                  />
-                  {textHeight > height ? (
-                    <g clipPath={`url(#${noteClipId(note.id)})`}>{text}</g>
-                  ) : (
-                    text
+                <g key={note.id}>
+                  {/* Il clipPath deve esistere nel DOM della scheda, altrimenti
+                      un box più basso del testo non verrebbe ritagliato. */}
+                  {textHeight > height && (
+                    <defs>
+                      <clipPath id={printNoteClipId(note.id)}>
+                        <rect width={round(note.width)} height={round(height)} />
+                      </clipPath>
+                    </defs>
                   )}
+                  <g transform={`translate(${round(note.x)}, ${round(note.y)})`}>
+                    <rect
+                      width={round(note.width)}
+                      height={round(height)}
+                      rx={4}
+                      fill={note.color}
+                    />
+                    {textHeight > height ? (
+                      <g clipPath={`url(#${printNoteClipId(note.id)})`}>{text}</g>
+                    ) : (
+                      text
+                    )}
+                  </g>
                 </g>
               );
             }

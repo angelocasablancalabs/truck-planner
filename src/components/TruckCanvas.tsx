@@ -38,7 +38,6 @@ import {
   splitLabelIntoTwoLines,
 } from '../utils/labels';
 import {
-  NOTE_LANE_OFFSET_CM,
   NOTE_MAX_HEIGHT_CM,
   NOTE_MAX_WIDTH_CM,
   NOTE_MIN_HEIGHT_CM,
@@ -46,6 +45,8 @@ import {
   NOTE_PADDING_CM,
   NOTE_RESIZE_HANDLE_COLOR,
   NOTE_RESIZE_HANDLE_SIZE_CM,
+  noteMaxX,
+  noteMinX,
   resolveNoteLayouts,
 } from '../utils/sideNotes';
 
@@ -234,14 +235,17 @@ interface DragState {
 }
 
 /**
- * Stato del trascinamento di una nota laterale: le note si spostano solo lungo
- * l'asse Y (Cabina → Porte), restando ancorate alla corsia a destra del mezzo.
+ * Stato del trascinamento di una nota laterale: la card si sposta **liberamente
+ * in 2D** (`ΔX`, `ΔY` in cm reali), quindi può essere portata a sinistra del
+ * rimorchio (`X < 0`), oltre la parete destra, lungo il pianale o in coda.
  */
 interface NoteDragState {
   id: string;
   /** Cursore in cm reali al momento del pointerdown. */
+  startCursorX: number;
   startCursorY: number;
-  /** Quota Y di partenza della nota (cm). */
+  /** Posizione di partenza della nota (cm). */
+  startX: number;
   startY: number;
   /** Spostamento minimo (cm) che ha già promosso il gesto a trascinamento. */
   moved: boolean;
@@ -276,8 +280,8 @@ interface TruckCanvasProps {
   onSelectItems: (ids: string[]) => void;
   /** Selezione di una nota (azzera la selezione dei colli). */
   onSelectNote: (id: string | null) => void;
-  /** Trascinamento verticale di una nota lungo la corsia (cm reali). */
-  onUpdateNotePos: (id: string, y: number) => void;
+  /** Trascinamento libero 2D di una nota (X e Y in cm reali). */
+  onUpdateNotePos: (id: string, x: number, y: number) => void;
   /** Ridimensionamento della card di nota (larghezza / altezza in cm). */
   onUpdateNoteSize: (id: string, size: { width: number; height: number }) => void;
   onUpdateItemsPos: (updates: ItemPositionUpdate[]) => void;
@@ -370,20 +374,21 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
 
   /**
-   * Corsia delle note laterali: tutte le card vivono a
-   * `X = vehicle.width + NOTE_LANE_OFFSET_CM`, fuori dal pianale utile, quindi
-   * non entrano mai nel calcolo dei metri lineari. Le eventuali sovrapposizioni
-   * vengono risolte spingendo la card più in basso (`resolveNoteLayouts`), senza
-   * mai modificare la quota Y scelta dall'operatore.
+   * Note laterali: posizionamento **liberamente 2D**. Di default nascono a
+   * `X = vehicle.width + NOTE_LANE_OFFSET_CM` (subito a destra della parete), ma
+   * possono essere trascinate ovunque attorno al camion — anche a sinistra del
+   * rimorchio. Le card non entrano mai nel calcolo dei metri lineari e nessuna
+   * viene spostata d'ufficio: `resolveNoteLayouts` si limita a misurarle.
    */
-  const noteLaneX = vehicle.width + NOTE_LANE_OFFSET_CM;
   const noteLayouts = resolveNoteLayouts(notes);
   const selectedNoteIdSet = new Set(selectedNoteId ? [selectedNoteId] : []);
 
   /**
-   * Trascinamento di una nota: si aggiorna solo la Y, con clamp tra 0 (Cabina) e
-   * la quota di fondo dinamica `effectiveLength` (Porte posteriori o ultimo
-   * collo sbordato). La X resta sempre quella della corsia note.
+   * Trascinamento di una nota: si aggiornano **entrambe** le coordinate in cm
+   * reali (`ΔX`, `ΔY` dal pointerdown). La Y resta clampata tra 0 (Cabina) e la
+   * quota di fondo dinamica `effectiveLength` (Porte posteriori o ultimo collo
+   * sbordato); la X può invece andare a sinistra del rimorchio (`X < 0`) o oltre
+   * la parete destra, entro lo spazio di lavoro `noteMinX` / `noteMaxX`.
    */
   const handleNotePointerDown = (note: SideNote, e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -397,7 +402,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     onSelectNote(note.id);
     draggingNote.current = {
       id: note.id,
+      startCursorX: cursor.x,
       startCursorY: cursor.y,
+      startX: note.x,
       startY: note.y,
       moved: false,
     };
@@ -677,19 +684,23 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       return;
     }
 
-    // 1) Trascinamento di una nota laterale: si aggiorna la sola quota Y.
+    // 1) Trascinamento libero 2D di una nota laterale: si aggiornano sia la X sia
+    //    la Y in cm reali. La X può uscire dal pianale (anche negativa), la Y è
+    //    clampata tra Cabina (0) e quota di fondo dinamica.
     const noteDrag = draggingNote.current;
     if (noteDrag) {
       const cursor = toCanvasCm(e.clientX, e.clientY);
       if (!cursor) return;
+      const deltaX = cursor.x - noteDrag.startCursorX;
       const deltaY = cursor.y - noteDrag.startCursorY;
-      if (Math.abs(deltaY) > NOTE_DRAG_THRESHOLD_CM) noteDrag.moved = true;
+      if (Math.hypot(deltaX, deltaY) > NOTE_DRAG_THRESHOLD_CM) noteDrag.moved = true;
       if (!noteDrag.moved) return;
-      const nextY = Math.max(
-        0,
-        Math.min(effectiveLength, noteDrag.startY + deltaY)
+      const nextX = Math.max(
+        noteMinX(vehicle.width),
+        Math.min(noteMaxX(vehicle.width), noteDrag.startX + deltaX)
       );
-      onUpdateNotePos(noteDrag.id, nextY);
+      const nextY = Math.max(0, Math.min(effectiveLength, noteDrag.startY + deltaY));
+      onUpdateNotePos(noteDrag.id, nextX, nextY);
       return;
     }
 
@@ -1015,7 +1026,10 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             suppressBackgroundClick.current = false;
             return;
           }
+          // Il click sullo sfondo azzera ogni selezione: colli E nota attiva
+          // (le due modalità non coesistono, quindi tornano a riposo assieme).
           onSelectItems([]);
+          onSelectNote(null);
         }}
         onPointerDown={handleBackgroundPointerDown}
         onPointerMove={handlePointerMove}
@@ -1396,10 +1410,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               />
             )}
 
-            {/* CORSIA DELLE NOTE LATERALI: tutte le card a
-                X = vehicle.width + 30 cm, fuori dal pianale utile. Cliccando una
-                nota la si seleziona (e si deselezionano i colli); trascinandola
-                con il puntatore si sposta lungo l'asse Y, mentre la maniglia
+            {/* NOTE LATERALI 2D LIBERE: ogni card vive alle proprie coordinate
+                (x, y) in cm reali, quindi può stare a destra del camion, a
+                sinistra (`x < 0`), lungo il pianale o in coda. Cliccando una nota
+                la si seleziona (e si deselezionano i colli); trascinandola con il
+                puntatore si sposta liberamente in X e Y, mentre la maniglia
                 nell'angolo basso-destro ne ridimensiona il box. */}
             {noteLayouts.map(({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
               const isSelected = selectedNoteIdSet.has(note.id);
@@ -1407,23 +1422,25 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               return (
                 <g
                   key={note.id}
-                  transform={`translate(${noteLaneX}, ${note.y})`}
+                  transform={`translate(${note.x}, ${note.y})`}
                   onPointerDown={(e) => handleNotePointerDown(note, e)}
                   onClick={(e) => e.stopPropagation()}
                   className="cursor-move"
                 >
+                  {/* ZERO BORDI A RIPOSO: la card è puro testo fluttuante; solo la
+                      nota selezionata mostra il contorno blu CAD di evidenziazione. */}
                   <rect
                     width={note.width}
                     height={height}
                     rx={4}
                     fill={note.color}
-                    stroke={isSelected ? SELECTION_COLOR : note.borderColor}
-                    strokeWidth={isSelected ? 2 : 1}
+                    stroke={isSelected ? SELECTION_COLOR : 'none'}
+                    strokeWidth={isSelected ? 2 : 0}
                     filter="url(#side-note-shadow)"
                   />
 
                   {/* UNICO TESTO DELLA NOTA: coordinate RELATIVE all'origine del
-                      box (il gruppo è già traslato in `noteLaneX, note.y`).
+                      box (il gruppo è già traslato in `note.x, note.y`).
                       `x = 10` per il testo e per ogni `tspan`, così l'intero
                       contenuto resta rigorosamente dentro il rettangolo. Il
                       clip aggiuntivo vale solo per un box più basso del testo. */}

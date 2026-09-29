@@ -15,6 +15,7 @@ import {
   NOTE_DEFAULT_FONT_SIZE,
   NOTE_DEFAULT_WIDTH_CM,
   NOTE_FONT_SIZES,
+  NOTE_LANE_OFFSET_CM,
   NOTE_MAX_HEIGHT_CM,
   NOTE_MAX_WIDTH_CM,
   NOTE_MIN_HEIGHT_CM,
@@ -22,6 +23,7 @@ import {
   NOTE_PASTEL_COLORS,
   NOTE_SIZE_STEP_CM,
   buildNoteSeedText,
+  findFreeNoteY,
   noteCharsPerLine,
   noteGeometry,
   resolveNoteFontSize,
@@ -126,11 +128,18 @@ interface ControlDeckProps {
 /** Testo di partenza di una nota appena creata, da personalizzare. */
 const DEFAULT_NOTE_CONTENT = 'Inserisci nota operativa...';
 
-/** Etichette del selettore compatto di dimensione testo. */
+/** Etichette del selettore compatto di dimensione testo (scala 11 / 14 / 18 px). */
 const NOTE_FONT_LABELS: Record<number, string> = {
-  9: 'A-',
-  11: 'A',
-  14: 'A+',
+  11: 'A-',
+  14: 'A',
+  18: 'A+',
+};
+
+/** Classi di anteprima del glifo `A` per ciascun corpo della scala. */
+const NOTE_FONT_PREVIEW_CLASS: Record<number, string> = {
+  11: 'text-[10px]',
+  14: 'text-[12px]',
+  18: 'text-[15px]',
 };
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
@@ -245,24 +254,35 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   /**
    * Crea una nota laterale a partire dai colli selezionati, con eredità
    * automatica di quota, testo e colore:
-   * - `y`: quota minima Y della selezione (la nota si allinea alla loro altezza);
+   * - `x`: `vehicle.width + NOTE_LANE_OFFSET_CM` — nasce subito a **destra della
+   *   parete** del semirimorchio (poi è libera di andare ovunque in 2D);
+   * - `y`: quota minima Y della selezione (la nota si allinea alla loro altezza),
+   *   scorrita verso il basso solo se una card esistente occupa già quello spazio;
    * - `content`: pre-popolato col nome del primo collo (es. `"PRODIVA 3S - "`),
    *   già pronto per essere completato con l'avvertenza operativa;
    * - `color`: l'esatto pastello di riempimento del collo selezionato;
-   * - `borderColor`: antracite tenue `#94A3B8`, `width`: 140 cm,
-   *   `fontSize`: 11 px (il testo si adatta al box).
+   * - `borderColor`: metadato storico `#94A3B8` (la card è senza bordo a riposo),
+   *   `width`: 140 cm, `fontSize`: 14 px (taglia "Media" della scala 11/14/18).
    */
   const handleAddSideNote = () => {
     if (selectedItems.length === 0) return;
 
     const anchor = selectedItems[0];
-    onAddNote({
+    const draft: Omit<SideNote, 'id'> = {
+      x: vehicle.width + NOTE_LANE_OFFSET_CM,
       y: Math.min(...selectedItems.map((item) => item.y)),
       content: buildNoteSeedText(anchor.name) || DEFAULT_NOTE_CONTENT,
       color: anchor.color,
       borderColor: NOTE_BORDER_COLOR,
       width: NOTE_DEFAULT_WIDTH_CM,
       fontSize: NOTE_DEFAULT_FONT_SIZE,
+    };
+
+    // Spawn ordinato: se un'altra nota occupa già quello spazio, la nuova card
+    // scende di poco invece di sovrapporsi (le note esistenti non si muovono).
+    onAddNote({
+      ...draft,
+      y: findFreeNoteY(notes, { x: draft.x, y: draft.y }, draft),
     });
   };
 
@@ -950,7 +970,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
               Nota Laterale Selezionata
             </span>
             <span className="text-[10px] font-mono font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded tabular-nums">
-              Y {selectedNote.y.toFixed(1)} cm
+              X {selectedNote.x.toFixed(1)} · Y {selectedNote.y.toFixed(1)} cm
             </span>
           </div>
 
@@ -973,7 +993,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             </span>
           </label>
 
-          {/* Dimensione del testo: tre corpi ammessi (9 / 11 / 14 px). */}
+          {/* Dimensione del testo: i tre corpi della scala ufficiale (11/14/18 px). */}
           <div className="space-y-1">
             <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
               Dimensione Testo
@@ -999,7 +1019,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                         : 'text-slate-500 hover:text-slate-700 font-medium'
                     }`}
                   >
-                    <span className={size === 9 ? 'text-[10px]' : size === 11 ? 'text-[12px]' : 'text-[14px]'}>
+                    <span className={NOTE_FONT_PREVIEW_CLASS[size]}>
                       {NOTE_FONT_LABELS[size]}
                     </span>
                     <span className="ml-1 text-[9px] font-mono">({size}px)</span>
