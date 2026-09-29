@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { PlacedItem, VehicleConfig } from '../types';
-import { PALLET_CATALOG } from '../constants';
+import type { LabelDensity, PlacedItem, VehicleConfig } from '../types';
+import { PALLET_CATALOG, NOMINAL_QUOTA_CM, NOMINAL_QUOTA_COLOR } from '../constants';
+import { LDM_BADGE, LDM_BADGE_CENTER_X, LDM_BADGE_COLOR, LDM_BADGE_LEFT_X, LDM_BADGE_MUTED_COLOR, LDM_GUIDE_CLOSING_LENGTH, LDM_GUIDE_COLOR, LDM_GUIDE_DASH, ldmBadgeRightCenterX, ldmBadgeRightLeftX } from '../constants';
+import { calculateLdmMetrics } from '../utils/snapping';
 import { getPianoExtent } from '../utils/export';
 
 /* -------------------------------------------------------------------------- *
@@ -29,6 +31,15 @@ const COLORS = {
   caption: '#334155',
   name: '#1E293B',
   dimensions: '#475569',
+  /** Quota nominale 13,20 m, come sul canvas a schermo. */
+  nominalQuota: NOMINAL_QUOTA_COLOR,
+  /** Linea guida del contatore LDM (blu CAD). */
+  ldmGuide: LDM_GUIDE_COLOR,
+  /** Badge del lato più carico (scuro primario). */
+  ldmBadge: LDM_BADGE_COLOR,
+  /** Badge del lato meno carico (slate intermedio). */
+  ldmBadgeMuted: LDM_BADGE_MUTED_COLOR,
+  ldmBadgeText: '#FFFFFF',
 } as const;
 
 const FONT_FAMILY = 'Helvetica, Arial, sans-serif';
@@ -79,13 +90,21 @@ const buildSummaryRows = (items: PlacedItem[]): PrintSummaryRow[] => {
 interface PrintReportProps {
   vehicle: VehicleConfig;
   items: PlacedItem[];
+  /** Densità etichette dell'app: con `minimal` il disegno resta pulito. */
+  labelDensity: LabelDensity;
 }
 
 /**
  * Scheda di carico ufficiale: intestazione, disegno vettoriale del camion
  * centrato sull'altezza utile A4 e tabella riepilogo in calce.
+ *
+ * Il disegno riporta gli stessi riferimenti metrici del canvas a schermo:
+ * quota nominale 13,20 m (sui mezzi che la raggiungono) e indicatori LDM
+ * calcolati dalla funzione condivisa `calculateLdmMetrics` (Regola del
+ * Baricentro). Il dato ufficiale dei metri lineari è inoltre esposto come riga
+ * dedicata nella tabella riassuntiva.
  */
-export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
+export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelDensity }) => {
   // Data/ora di generazione: aggiornata all'apertura della stampa del browser.
   const [generatedAt, setGeneratedAt] = useState<Date>(() => new Date());
 
@@ -95,8 +114,62 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
     return () => window.removeEventListener('beforeprint', refreshTimestamp);
   }, []);
 
-  const extent = getPianoExtent(vehicle, items);
+  const extent = getPianoExtent(vehicle, items, labelDensity);
   const rows = buildSummaryRows(items);
+
+  /**
+   * Ingombro LDM dei due lati (Regola del Baricentro), dalla stessa funzione
+   * pura che alimenta canvas a schermo ed export PNG: la scheda stampata non
+   * può divergere da ciò che l'operatore vede sul pianale.
+   */
+  const ldm = calculateLdmMetrics(vehicle, items);
+  /** Asse di mezzeria: separa i due indicatori nel caso asimmetrico. */
+  const ldmMidX = vehicle.width / 2;
+  /** Con densità `minimal` linee e badge LDM non vengono disegnati. */
+  const showsLdmIndicator = labelDensity !== 'minimal' && ldm.maxOccupiedY > 0;
+  /**
+   * Riga LDM della tabella: il dato ufficiale dei metri lineari resta nel
+   * documento anche con densità `minimal` (che pulisce solo il disegno).
+   */
+  const showsLdmRow = ldm.maxOccupiedY > 0;
+  /** Lato più carico → badge scuro primario; l'altro → slate intermedio. */
+  const leftLdmBadgeColor =
+    ldm.leftY >= ldm.rightY ? COLORS.ldmBadge : COLORS.ldmBadgeMuted;
+  const rightLdmBadgeColor =
+    ldm.leftY >= ldm.rightY ? COLORS.ldmBadgeMuted : COLORS.ldmBadge;
+  /** Riferimento della quota nominale 13,20 m (solo sui mezzi che la raggiungono). */
+  const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
+
+  /** Badge LDM: rettangolo ad alto contrasto + dicitura bianca centrata (cm reali). */
+  const renderLdmBadge = (
+    leftX: number,
+    centerX: number,
+    y: number,
+    label: string,
+    fill: string
+  ) => (
+    <g>
+      <rect
+        x={round(leftX)}
+        y={round(y - LDM_BADGE.height / 2)}
+        width={LDM_BADGE.width}
+        height={LDM_BADGE.height}
+        rx={3}
+        fill={fill}
+      />
+      <text
+        x={round(centerX)}
+        y={round(y + PRINT_FONT.meter * 0.35)}
+        textAnchor="middle"
+        fontFamily={FONT_FAMILY}
+        fontSize={PRINT_FONT.meter}
+        fontWeight="bold"
+        fill={COLORS.ldmBadgeText}
+      >
+        {label}
+      </text>
+    </g>
+  );
 
   // "Bilico frigo Fiori (2,50 × 13,28 m)" → "Bilico frigo Fiori"
   const vehicleName = vehicle.name.replace(/\s*\(.*\)\s*$/, '');
@@ -164,6 +237,115 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
                 </text>
               </g>
             )
+          )}
+
+          {/* Quota nominale 13,20 m: identica al canvas a schermo
+              (`stroke #94A3B8`, tratteggio 6 3, dicitura nel righello sinistro).
+              Presente solo sui mezzi che raggiungono i 1320 cm. */}
+          {showsNominalQuota && (
+            <g>
+              <line
+                x1={0}
+                y1={NOMINAL_QUOTA_CM}
+                x2={vehicle.width}
+                y2={NOMINAL_QUOTA_CM}
+                stroke={COLORS.nominalQuota}
+                strokeWidth={1.5}
+                strokeDasharray="6 3"
+              />
+              <text
+                x={-4}
+                y={round(NOMINAL_QUOTA_CM + PRINT_FONT.meter * 0.4)}
+                textAnchor="end"
+                fontFamily={MONO_FONT_FAMILY}
+                fontSize={PRINT_FONT.meter}
+                fontWeight="bold"
+                fill={COLORS.caption}
+              >
+                13.20m
+              </text>
+            </g>
+          )}
+
+          {/* Indicatori LDM dal calcolo condiviso `calculateLdmMetrics`:
+              simmetrico → linea guida continua + badge scuro a sinistra;
+              asimmetrico → due linee tratteggiate (metà SX e metà DX) con badge
+              nel righello sinistro ed esterno alla parete destra. */}
+          {showsLdmIndicator && !ldm.isAsymmetric && (
+            <g>
+              <line
+                x1={0}
+                y1={round(ldm.maxOccupiedY)}
+                x2={vehicle.width}
+                y2={round(ldm.maxOccupiedY)}
+                stroke={COLORS.ldmGuide}
+                strokeWidth={1}
+              />
+              {renderLdmBadge(
+                LDM_BADGE_LEFT_X,
+                LDM_BADGE_CENTER_X,
+                ldm.maxOccupiedY,
+                `▶ ${(ldm.maxOccupiedY / 100).toFixed(2)} m`,
+                COLORS.ldmBadge
+              )}
+            </g>
+          )}
+
+          {showsLdmIndicator && ldm.isAsymmetric && (
+            <g>
+              {/* Lato sinistro: linea tratteggiata 0 → mezzeria, chiusa a filo
+                  da un segmento pieno (il tratteggio non deve restare sospeso). */}
+              <line
+                x1={0}
+                y1={round(ldm.leftY)}
+                x2={round(ldmMidX)}
+                y2={round(ldm.leftY)}
+                stroke={COLORS.ldmGuide}
+                strokeWidth={1}
+                strokeDasharray={LDM_GUIDE_DASH}
+              />
+              <line
+                x1={round(Math.max(0, ldmMidX - LDM_GUIDE_CLOSING_LENGTH))}
+                y1={round(ldm.leftY)}
+                x2={round(ldmMidX)}
+                y2={round(ldm.leftY)}
+                stroke={COLORS.ldmGuide}
+                strokeWidth={1}
+              />
+              {renderLdmBadge(
+                LDM_BADGE_LEFT_X,
+                LDM_BADGE_CENTER_X,
+                ldm.leftY,
+                `▶ ${(ldm.leftY / 100).toFixed(2)} m`,
+                leftLdmBadgeColor
+              )}
+
+              {/* Lato destro: linea tratteggiata mezzeria → parete, badge esterno. */}
+              <line
+                x1={round(ldmMidX)}
+                y1={round(ldm.rightY)}
+                x2={vehicle.width}
+                y2={round(ldm.rightY)}
+                stroke={COLORS.ldmGuide}
+                strokeWidth={1}
+                strokeDasharray={LDM_GUIDE_DASH}
+              />
+              <line
+                x1={round(Math.max(ldmMidX, vehicle.width - LDM_GUIDE_CLOSING_LENGTH))}
+                y1={round(ldm.rightY)}
+                x2={vehicle.width}
+                y2={round(ldm.rightY)}
+                stroke={COLORS.ldmGuide}
+                strokeWidth={1}
+              />
+              {renderLdmBadge(
+                ldmBadgeRightLeftX(vehicle.width),
+                ldmBadgeRightCenterX(vehicle.width),
+                ldm.rightY,
+                `◀ ${(ldm.rightY / 100).toFixed(2)} m`,
+                rightLdmBadgeColor
+              )}
+            </g>
           )}
 
           {/* Colli stivati (nessun contorno di selezione in stampa) */}
@@ -306,6 +488,23 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items }) => {
             )}
           </tbody>
           <tfoot>
+            {/* Dato ufficiale LDM: riga dedicata ed evidenziata, calcolata dalla
+                funzione condivisa `calculateLdmMetrics` (Regola del Baricentro). */}
+            {showsLdmRow && (
+              <tr
+                id="print-ldm-row"
+                className="bg-blue-50 font-bold text-slate-900"
+              >
+                <td colSpan={3} className="border border-slate-300 px-1.5 py-1 uppercase">
+                  Ingombro Lineare (LDM)
+                </td>
+                <td className="border border-slate-300 px-1.5 py-1 text-right font-mono">
+                  {ldm.isAsymmetric
+                    ? `Lato SX ${(ldm.leftY / 100).toFixed(2)} m | Lato DX ${(ldm.rightY / 100).toFixed(2)} m`
+                    : `${(ldm.maxOccupiedY / 100).toFixed(2)} m`}
+                </td>
+              </tr>
+            )}
             <tr className="bg-slate-50 font-bold text-slate-900">
               <td colSpan={3} className="border border-slate-300 px-1.5 py-1 text-right uppercase">
                 Totale colli

@@ -1,4 +1,5 @@
 import type { VehicleConfig, PlacedItem } from '../types';
+import { LDM_SYMMETRY_TOLERANCE_CM } from '../constants';
 
 /** Tolleranza di aggancio magnetico predefinita, espressa in centimetri reali. */
 export const DEFAULT_SNAP_THRESHOLD = 5;
@@ -48,6 +49,67 @@ const clampYWithOverhang = (value: number, vehicleLength: number, itemLength: nu
   const upper = vehicleLength + REAR_OVERHANG_LIMIT - itemLength;
   return Math.max(0, Math.min(upper, value));
 };
+
+/**
+ * Ingombro LDM (metri lineari occupati) di un pianale, calcolato con la
+ * **Regola del Baricentro** sui due lati dell'asse di mezzeria.
+ *
+ * Un collo non viene più assegnato a un lato in base a un generico sconfinamento
+ * della mezzeria (che faceva contare un collo "a cavallo" su entrambi i lati, o
+ * nessuno dei due), ma in base a **dove ricade il proprio centro geometrico**:
+ * - `cx < midX` → lato sinistro;
+ * - `cx >= midX` → lato destro;
+ * - collo a **tutta larghezza** (larghezza ≥ 60% della larghezza utile, es.
+ *   `SFUSO`) → occupa inevitabilmente entrambi i lati.
+ */
+export interface LdmMetrics {
+  /** Ingombro (cm) del lato sinistro, misurato dalla Cabina. */
+  leftY: number;
+  /** Ingombro (cm) del lato destro, misurato dalla Cabina. */
+  rightY: number;
+  /** `true` se i due lati differiscono di almeno 1 cm (`LDM_SYMMETRY_TOLERANCE_CM`). */
+  isAsymmetric: boolean;
+  /** Ingombro massimo (cm) tra i due lati: riferimento del caso simmetrico. */
+  maxOccupiedY: number;
+}
+
+/**
+ * Calcola l'ingombro LDM dei due lati del pianale con la Regola del Baricentro.
+ *
+ * Funzione **pura** condivisa da canvas a schermo (`TruckCanvas.tsx`), export PNG
+ * (`utils/export.ts`) e scheda di stampa A4 (`PrintReport.tsx`): un'unica fonte
+ * di verità, nessuna discrepanza possibile tra le tre rese.
+ *
+ * @param vehicle Configurazione del mezzo (dimensioni utili in cm)
+ * @param items   Colli stivati sul pianale
+ */
+export function calculateLdmMetrics(vehicle: VehicleConfig, items: PlacedItem[]): LdmMetrics {
+  const midX = vehicle.width / 2;
+  const wideThreshold = vehicle.width * 0.6; // colli a tutta larghezza (es. Sfuso)
+  let leftY = 0;
+  let rightY = 0;
+
+  for (const item of items) {
+    const bottom = item.y + item.length;
+    if (item.width >= wideThreshold) {
+      if (bottom > leftY) leftY = bottom;
+      if (bottom > rightY) rightY = bottom;
+    } else {
+      // Regola del Baricentro: guarda dove ricade il centro geometrico del collo
+      const cx = item.x + item.width / 2;
+      if (cx < midX) {
+        if (bottom > leftY) leftY = bottom;
+      } else {
+        if (bottom > rightY) rightY = bottom;
+      }
+    }
+  }
+
+  const isAsymmetric =
+    items.length > 0 && Math.abs(leftY - rightY) >= LDM_SYMMETRY_TOLERANCE_CM;
+  const maxOccupiedY = Math.max(leftY, rightY);
+  return { leftY, rightY, isAsymmetric, maxOccupiedY };
+}
 
 /**
  * Indica se il collo esce dalla sagoma utile del rimorchio (pareti, cabina o
@@ -166,6 +228,13 @@ export const hasCollision = (
  * sinistra verso destra: il primo rettangolo che rientra nella sagoma utile
  * e non collide con nulla viene restituito immediatamente.
  *
+ * Il vincolo di lunghezza NON è più un muro alla linea delle porte: la ricerca
+ * prosegue identica nella zona di sforamento posteriore fino a
+ * `vehicle.length + REAR_OVERHANG_LIMIT`, così i colli in eccesso continuano a
+ * disporsi a file ordinate affiancate da sinistra a destra (e non più tutti
+ * impilati in un'unica colonna a X = 0). Il vincolo laterale resta invece
+ * RIGIDO: nessun collo può sbordare dalle pareti del mezzo.
+ *
  * @param width   Larghezza del nuovo collo (cm)
  * @param length  Lunghezza del nuovo collo (cm, asse Cabina → Porte)
  * @param vehicle Configurazione del veicolo (dimensioni in cm)
@@ -190,23 +259,47 @@ export function findSmartSpawnPosition(
     new Set([0, ...items.map((item) => item.x + item.width)])
   ).sort((a, b) => a - b);
 
+  /** Fondo massimo consentito nella zona di sforamento posteriore (cm). */
+  const maxBottomY = vehicle.length + REAR_OVERHANG_LIMIT;
+
+  /** Un candidato è valido se non sborda dalle pareti né collide con altri colli. */
+  const fitsSagomaLaterale = (x: number): boolean => x + width <= vehicle.width;
+  const isFree = (x: number, y: number): boolean =>
+    !items.some((other) => isRectColliding(x, y, width, length, other));
+
+  // 1ª passata: first-fit dentro la sagoma utile, estesa alla zona di sforamento
+  // posteriore consentita (Y + lunghezza ≤ vehicle.length + REAR_OVERHANG_LIMIT).
   for (const y of yCandidates) {
     for (const x of xCandidates) {
-      // Deve rientrare nella sagoma utile del mezzo...
-      if (x + width > vehicle.width || y + length > vehicle.length) continue;
-      // ...e non sovrapporsi a nessun collo già presente.
-      if (items.some((other) => isRectColliding(x, y, width, length, other))) continue;
+      // Pareti laterali RIGIDE: i colli non devono mai sbordare a destra...
+      if (!fitsSagomaLaterale(x)) continue;
+      // ...sforamento posteriore ammesso solo entro il buffer di 150 cm...
+      if (y + length > maxBottomY) continue;
+      // ...e nessuna sovrapposizione con i colli già presenti.
+      if (!isFree(x, y)) continue;
       return { x, y };
     }
   }
 
-  // Nessuno slot a incastro disponibile: accoda il collo a fila sotto il più
-  // avanzato, anche a costo di sbordare oltre le porte posteriori
-  // ("verità visiva del piazzale": nessun clamp che lo spingerebbe sopra i
-  // bancali già caricati creando false collisioni interne).
+  // 2ª passata: il first-fit CONTINUA a file ordinate anche oltre il buffer di
+  // sforamento, mantenendo il solo blocco laterale. Serve a far affiancare i
+  // colli in eccesso (X = 0, X = 120, …) alla stessa quota, invece di impilarli
+  // in un'unica colonna sinistra; l'allarme rosso `isOutOfBounds` li segnala.
+  for (const y of yCandidates) {
+    for (const x of xCandidates) {
+      if (!fitsSagomaLaterale(x)) continue;
+      if (!isFree(x, y)) continue;
+      return { x, y };
+    }
+  }
+
+  // Ultima rete di sicurezza (es. collo più largo del pianale, nessun candidato
+  // utilizzabile): accoda il collo a fila sotto il più avanzato, anche a costo
+  // di sbordare oltre le porte posteriori ("verità visiva del piazzale": nessun
+  // clamp che lo spingerebbe sopra i bancali già caricati creando false
+  // collisioni interne).
   const maxY = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
-  const maxX = Math.max(0, vehicle.width - width);
-  return { x: Math.max(0, Math.min(maxX, 0)), y: maxY };
+  return { x: 0, y: maxY };
 }
 
 

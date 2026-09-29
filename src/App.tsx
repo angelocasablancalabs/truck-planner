@@ -308,7 +308,7 @@ export default function App() {
       </div>
 
       {/* Scheda di carico A4: presente nel DOM, visibile solo su carta. */}
-      <PrintReport vehicle={vehicle} items={items} />
+      <PrintReport vehicle={vehicle} items={items} labelDensity={labelDensity} />
     </>
   );
 }

@@ -141,6 +141,16 @@ export const NOMINAL_QUOTA_COLOR = '#94A3B8';
 /** Colore della linea guida del contatore dinamico LDM (metri lineari occupati). */
 export const LDM_GUIDE_COLOR = '#2563EB';
 
+/** Tratteggio delle linee guida LDM asimmetriche (`strokeDasharray`, cm). */
+export const LDM_GUIDE_DASH = '6 4';
+
+/**
+ * Segmento pieno di chiusura (cm) tracciato a filo mezzeria o a filo parete
+ * destra: il tratteggio, interrompendosi a metà periodo, lascerebbe altrimenti
+ * la linea guida "sospesa" prima del bordo della propria metà pianale.
+ */
+export const LDM_GUIDE_CLOSING_LENGTH = 10;
+
 /** Colore di fondo del badge LDM (slate scuro ad alto contrasto). */
 export const LDM_BADGE_COLOR = '#1E293B';
 
@@ -152,8 +162,9 @@ export const LDM_BADGE_COLOR = '#1E293B';
 export const LDM_BADGE_MUTED_COLOR = '#475569';
 
 /**
- * Tolleranza (cm) sotto la quale i due lati sono considerati simmetrici: in quel
- * caso si torna al singolo indicatore centrato sull'ingombro massimo.
+ * Tolleranza (cm) sotto la quale i due lati restano equivalenti: è la soglia
+ * applicata dalla funzione pura `calculateLdmMetrics` di `utils/snapping.ts`,
+ * unica fonte di verità del calcolo LDM (canvas, export PNG e scheda A4).
  */
 export const LDM_SYMMETRY_TOLERANCE_CM = 1;
 

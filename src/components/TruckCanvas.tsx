@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
 import type { VehicleConfig, PlacedItem, ItemPositionUpdate, LabelDensity } from '../types';
 import {
+  calculateLdmMetrics,
   calculateSnapPosition,
   hasCollision,
   isOutOfBounds,
@@ -16,8 +17,9 @@ import {
   LDM_BADGE_COLOR,
   LDM_BADGE_LEFT_X,
   LDM_BADGE_MUTED_COLOR,
+  LDM_GUIDE_CLOSING_LENGTH,
   LDM_GUIDE_COLOR,
-  LDM_SYMMETRY_TOLERANCE_CM,
+  LDM_GUIDE_DASH,
   NOMINAL_QUOTA_CM,
   NOMINAL_QUOTA_COLOR,
   ldmBadgeRightCenterX,
@@ -58,30 +60,38 @@ const CABINA_LABEL_OFFSET_CM = 32;
  * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
  * sopra la Cabina e sotto le Porte posteriori.
  *
- * - **Caso A** — il camion entra interamente nell'altezza dello schermo
- *   (`(vehicleLength + 80) * zoom <= containerH`): il pianale resta centrato
+ * L'altezza del disegno non è più la sola `vehicle.length` ma la **quota di
+ * fondo dinamica** `effectiveLength = max(vehicle.length, maxItemBottom)`: se un
+ * collo sfora oltre le porte posteriori la corsa si estende fino a includerlo,
+ * mentre a pianale in sagoma (`effectiveLength === vehicle.length`) il
+ * comportamento resta identico al passato.
+ *
+ * - **Caso A** — il camion (compresi gli eventuali colli sbordati) entra
+ *   interamente nell'altezza dello schermo
+ *   (`(effectiveLength + 80) * zoom <= containerH`): il pianale resta centrato
  *   verticalmente nel viewport e non può scivolare via.
  * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
  *   si arresta a ridosso del bordo alto (`maxPanY = 40 + 32 * zoom`, che tiene
  *   dentro anche la didascalia `▲ CABINA ▲`) e le Porte posteriori a ridosso di
- *   quello basso (`minPanY = containerH - 50 - vehicleLength * zoom`).
+ *   quello basso (`minPanY = containerH - 50 - effectiveLength * zoom`).
  */
 const clampPanY = (
   panY: number,
   zoom: number,
-  vehicleLength: number,
+  effectiveLength: number,
   containerH: number
 ): number => {
-  const truckTotalHeightPx = (vehicleLength + PAN_LABEL_MARGIN_CM) * zoom;
+  const truckTotalHeightPx = (effectiveLength + PAN_LABEL_MARGIN_CM) * zoom;
 
-  // Caso A: il camion entra interamente nello schermo → pianale centrato.
+  // Caso A: il camion entra interamente nello schermo → pianale centrato sul
+  // proprio ingombro effettivo (colli sbordati inclusi).
   if (truckTotalHeightPx <= containerH) {
-    return (containerH - vehicleLength * zoom) / 2;
+    return (containerH - effectiveLength * zoom) / 2;
   }
 
   // Caso B: il camion è più lungo dello schermo → clamp rigoroso ai due bordi.
   const maxPanY = PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM * zoom;
-  const minPanY = containerH - PAN_BOTTOM_MARGIN_PX - vehicleLength * zoom;
+  const minPanY = containerH - PAN_BOTTOM_MARGIN_PX - effectiveLength * zoom;
   return Math.max(minPanY, Math.min(maxPanY, panY));
 };
 
@@ -248,26 +258,38 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
 
   /**
-   * Contatore dinamico LDM (metri lineari occupati), calcolato SEPARATAMENTE
-   * sui due lati della mezzeria del pianale: un carico asimmetrico (es. SX 1,60 m
-   * e DX 2,00 m) non può più essere mascherato da un unico valore massimo.
-   *
-   * Un collo a cavallo della mezzeria contribuisce a entrambi i lati, come è
-   * corretto che sia: occupa metri lineari su tutta la larghezza.
+   * Contatore dinamico LDM (metri lineari occupati), calcolato con la **Regola
+   * del Baricentro** dalla funzione pura condivisa `calculateLdmMetrics`: un
+   * collo appartiene al lato in cui ricade il proprio centro geometrico, mentre
+   * i colli a tutta larghezza (es. Sfuso) occupano inevitabilmente entrambi i
+   * lati. La stessa funzione alimenta l'export PNG e la scheda di stampa A4,
+   * quindi le tre rese non possono divergere.
    */
   const midX = vehicle.width / 2;
-  const leftOccupiedY = items
-    .filter((item) => item.x < midX)
-    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
-  const rightOccupiedY = items
-    .filter((item) => item.x + item.width > midX)
-    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  const ldm = calculateLdmMetrics(vehicle, items);
+  const leftOccupiedY = ldm.leftY;
+  const rightOccupiedY = ldm.rightY;
+  const maxOccupiedY = ldm.maxOccupiedY;
 
-  const maxOccupiedY = Math.max(leftOccupiedY, rightOccupiedY);
-  const hasLdmBadge = maxOccupiedY > 0;
+  /**
+   * Con densità etichette `minimal` il disegno resta volutamente pulito: le
+   * linee guida e i badge LDM vengono nascosti (il dato resta comunque nella
+   * tabella della scheda A4).
+   */
+  const showsLdmIndicator = labelDensity !== 'minimal' && maxOccupiedY > 0;
+
+  /**
+   * Quota di fondo dinamica: l'ingombro più profondo del carico può superare la
+   * lunghezza del mezzo (colli in eccesso accodati oltre le porte posteriori,
+   * fino a `REAR_OVERHANG_LIMIT`). La corsa di pan verticale si estende di
+   * conseguenza, così l'ultimo collo sbordato resta raggiungibile con la
+   * rotellina per selezionarlo, trascinarlo o eliminarlo. A pianale in sagoma
+   * `effectiveLength` coincide con `vehicle.length` e nulla cambia.
+   */
+  const maxItemBottom = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  const effectiveLength = Math.max(vehicle.length, maxItemBottom);
   // Sotto la tolleranza di 1 cm i due lati sono considerati simmetrici.
-  const ldmIsSymmetric =
-    Math.abs(leftOccupiedY - rightOccupiedY) < LDM_SYMMETRY_TOLERANCE_CM;
+  const ldmIsSymmetric = !ldm.isAsymmetric;
   // Lato più carico = badge scuro primario; lato meno carico = slate intermedio.
   const leftLdmIsHeavier = leftOccupiedY >= rightOccupiedY;
   const leftLdmBadgeColor = leftLdmIsHeavier ? LDM_BADGE_COLOR : LDM_BADGE_MUTED_COLOR;
@@ -314,6 +336,23 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   if (isViewportReady && fittedSignature !== fitSignature) {
     setFittedSignature(fitSignature);
     setView(fitView(vehicle, viewport));
+  }
+
+  /**
+   * Riallineamento alla quota di fondo dinamica (stesso pattern di
+   * "aggiustamento dello stato durante il render"): quando il collo sbordato
+   * viene eliminato — o rientra in sagoma — il limite inferiore torna a filo
+   * PORTE POSTERIORI e la vista vi si riallinea subito, senza restare appesa
+   * nello spazio grigio in attesa di un altro movimento di rotellina.
+   */
+  const [clampedLength, setClampedLength] = useState<number | null>(null);
+  if (isViewportReady && clampedLength !== effectiveLength) {
+    setClampedLength(effectiveLength);
+    setView((prev) => {
+      const clampedY = clampPanY(prev.pan.y, prev.zoom, effectiveLength, viewport.h);
+      if (clampedY === prev.pan.y) return prev;
+      return { ...prev, pan: { ...prev.pan, y: clampedY } };
+    });
   }
 
   // --- Conversioni di coordinate -------------------------------------------
@@ -370,7 +409,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             ...zoomed,
             pan: {
               ...zoomed.pan,
-              y: clampPanY(zoomed.pan.y, zoomed.zoom, vehicle.length, containerHeight),
+              y: clampPanY(zoomed.pan.y, zoomed.zoom, effectiveLength, containerHeight),
             },
           };
         });
@@ -397,14 +436,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         ...prev,
         pan: {
           ...prev.pan,
-          y: clampPanY(prev.pan.y - deltaY, prev.zoom, vehicle.length, containerHeight),
+          y: clampPanY(prev.pan.y - deltaY, prev.zoom, effectiveLength, containerHeight),
         },
       }));
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [vehicle.length]);
+  }, [effectiveLength]);
 
   // --- Sfondo: Pan (drag semplice) oppure Lasso (Shift + drag) --------------
   const handleBackgroundPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -513,7 +552,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
           y: clampPanY(
             panning.pan.y + (current.y - panning.start.y),
             prev.zoom,
-            vehicle.length,
+            effectiveLength,
             panHeight
           ),
         },
@@ -635,7 +674,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         ...zoomed,
         pan: {
           ...zoomed.pan,
-          y: clampPanY(zoomed.pan.y, zoomed.zoom, vehicle.length, containerHeight),
+          y: clampPanY(zoomed.pan.y, zoomed.zoom, effectiveLength, containerHeight),
         },
       };
     });
@@ -920,14 +959,16 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               </g>
             )}
 
-            {/* Contatore dinamico LDM (metri lineari occupati).
-                - Carico simmetrico (|SX − DX| < 1 cm): singolo indicatore a
-                  sinistra, linea guida continua alla Y massima, badge scuro.
+            {/* Contatore dinamico LDM (metri lineari occupati), dalla funzione
+                condivisa `calculateLdmMetrics` con la Regola del Baricentro.
+                - Carico simmetrico: singolo indicatore a sinistra, linea guida
+                  continua alla Y massima, badge scuro `#1E293B`.
                 - Carico asimmetrico: due indicatori tratteggiati, ciascuno sulla
                   propria metà pianale; il lato più carico ha il badge scuro
-                  primario, quello meno carico lo slate intermedio più chiaro.
-                  Il badge destro vive FUORI dalla parete destra. */}
-            {hasLdmBadge && ldmIsSymmetric && (
+                  primario, quello meno carico lo slate intermedio `#475569`.
+                  Il badge destro vive FUORI dalla parete destra.
+                - Densità `minimal`: nessuna linea e nessun badge (disegno pulito). */}
+            {showsLdmIndicator && ldmIsSymmetric && (
               <g>
                 <line
                   x1={0}
@@ -956,7 +997,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               </g>
             )}
 
-            {hasLdmBadge && !ldmIsSymmetric && (
+            {showsLdmIndicator && !ldmIsSymmetric && (
               <g>
                 {/* Indicatore SX: metà sinistra del pianale. */}
                 <line
@@ -966,7 +1007,17 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   y2={leftOccupiedY}
                   stroke={LDM_GUIDE_COLOR}
                   strokeWidth="1"
-                  strokeDasharray="6 4"
+                  strokeDasharray={LDM_GUIDE_DASH}
+                />
+                {/* Chiusura a filo mezzeria: il tratteggio non deve lasciare la
+                    linea "sospesa" prima dell'asse di mezzeria. */}
+                <line
+                  x1={Math.max(0, midX - LDM_GUIDE_CLOSING_LENGTH)}
+                  y1={leftOccupiedY}
+                  x2={midX}
+                  y2={leftOccupiedY}
+                  stroke={LDM_GUIDE_COLOR}
+                  strokeWidth="1"
                 />
                 <rect
                   x={LDM_BADGE_LEFT_X}
@@ -993,7 +1044,16 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   y2={rightOccupiedY}
                   stroke={LDM_GUIDE_COLOR}
                   strokeWidth="1"
-                  strokeDasharray="6 4"
+                  strokeDasharray={LDM_GUIDE_DASH}
+                />
+                {/* Chiusura a filo parete destra (stesso motivo del lato SX). */}
+                <line
+                  x1={Math.max(midX, vehicle.width - LDM_GUIDE_CLOSING_LENGTH)}
+                  y1={rightOccupiedY}
+                  x2={vehicle.width}
+                  y2={rightOccupiedY}
+                  stroke={LDM_GUIDE_COLOR}
+                  strokeWidth="1"
                 />
                 <rect
                   x={rightLdmBadgeLeftX}
