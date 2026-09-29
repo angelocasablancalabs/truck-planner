@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   VehicleConfig,
   PlacedItem,
@@ -7,6 +7,7 @@ import type {
   ItemPositionUpdate,
   LabelDensity,
   SideNote,
+  HistorySnapshot,
 } from './types';
 import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
@@ -27,6 +28,31 @@ const BATCH_MIN_QUANTITY = 1;
 const BATCH_MAX_QUANTITY = 99;
 const BATCH_DEFAULT_QUANTITY = 10;
 
+/** Numero massimo di fotogrammi conservati nella pila `past` (FIFO). */
+const HISTORY_LIMIT = 40;
+
+/**
+ * Copia profonda dello stato di stiva: uno snapshot non condivide mai alcun
+ * riferimento con lo stato vivo (né tra due fotogrammi distinti).
+ */
+const cloneSnapshot = (items: PlacedItem[], notes: SideNote[]): HistorySnapshot => ({
+  items: items.map((item) => ({ ...item })),
+  notes: notes.map((note) => ({ ...note })),
+});
+
+/**
+ * Accoda un fotogramma alla pila e la riporta al limite `HISTORY_LIMIT`,
+ * scartando i fotogrammi più vecchi (politica FIFO): la memoria della cronologia
+ * resta limitata anche sulle sessioni di carico più lunghe.
+ */
+const appendSnapshot = (
+  stack: HistorySnapshot[],
+  snapshot: HistorySnapshot
+): HistorySnapshot[] => {
+  const next = [...stack, snapshot];
+  return next.length > HISTORY_LIMIT ? next.slice(next.length - HISTORY_LIMIT) : next;
+};
+
 export default function App() {
   const [vehicle, setVehicle] = useState<VehicleConfig>(VEHICLE_PRESETS[0]); // Default CC Olandese
   const [items, setItems] = useState<PlacedItem[]>([]);
@@ -39,6 +65,92 @@ export default function App() {
   // Nota attualmente selezionata (null = nessuna): alimenta il pannello sidebar.
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
 
+  /* ------------------------------------------------------------------------ *
+   *  MOTORE UNDO / REDO (CRONOLOGIA A SNAPSHOT)
+   *
+   *  `past`   → pila degli stati passati (limite 40, politica FIFO);
+   *  `future` → pila degli stati futuri, alimentata dagli Undo per i Redo.
+   *
+   *  Ogni mutazione intenzionale della stiva registra un fotogramma **prima**
+   *  di avvenire (`pushSnapshot`). I gesti con il mouse fanno eccezione: il
+   *  movimento del puntatore NON produce snapshot, perché il fotogramma viene
+   *  scattato al `pointerDown` e convalidato al `pointerUp` solo se il
+   *  trascinamento ha davvero spostato qualcosa — l'intero drag vale così come
+   *  **un singolo passo** di Undo.
+   * ------------------------------------------------------------------------ */
+  const [past, setPast] = useState<HistorySnapshot[]>([]);
+  const [future, setFuture] = useState<HistorySnapshot[]>([]);
+  /** Fotogramma "in sospeso" del gesto col mouse in corso (drag di collo / nota). */
+  const pendingSnapshot = useRef<HistorySnapshot | null>(null);
+
+  const canUndo = past.length > 0;
+  const canRedo = future.length > 0;
+
+  /**
+   * Registra lo stato corrente nella pila dei passati e svuota quella dei
+   * futuri (una nuova azione invalida sempre il Redo).
+   * Va invocata **prima** di ogni mutazione intenzionale di colli o note.
+   */
+  const pushSnapshot = useCallback(() => {
+    setPast((prev) => appendSnapshot(prev, cloneSnapshot(items, notes)));
+    setFuture([]);
+  }, [items, notes]);
+
+  /**
+   * Inizio di un gesto col mouse (pointerDown su un collo o su una nota):
+   * memorizza il fotogramma di partenza senza ancora convalidarlo, perché il
+   * trascinamento potrebbe risolversi in un semplice click senza spostamenti.
+   */
+  const handleBeginHistoryGesture = useCallback(() => {
+    pendingSnapshot.current = cloneSnapshot(items, notes);
+  }, [items, notes]);
+
+  /**
+   * Fine del gesto (pointerUp): convalida il fotogramma in sospeso **solo** se
+   * il trascinamento ha realmente modificato lo stato. In caso contrario il
+   * gesto è stato un click e non lascia alcuna traccia nella cronologia.
+   */
+  const handleCommitHistoryGesture = useCallback((changed: boolean) => {
+    const snapshot = pendingSnapshot.current;
+    pendingSnapshot.current = null;
+    if (!changed || !snapshot) return;
+    setPast((prev) => appendSnapshot(prev, snapshot));
+    setFuture([]);
+  }, []);
+
+  /** Ripristina uno snapshot nella stiva, ripulendo le selezioni orfane. */
+  const restoreSnapshot = useCallback((snapshot: HistorySnapshot) => {
+    const restored = cloneSnapshot(snapshot.items, snapshot.notes);
+    setItems(restored.items);
+    setNotes(restored.notes);
+    // Selezione: sopravvivono solo gli ID ancora presenti nello stato ripristinato,
+    // così nessun pannello resta appeso a un collo o a una nota che non esistono più.
+    setSelectedItemIds((prev) =>
+      prev.filter((id) => restored.items.some((item) => item.id === id))
+    );
+    setSelectedNoteId((prev) =>
+      prev !== null && restored.notes.some((note) => note.id === prev) ? prev : null
+    );
+  }, []);
+
+  /** Annulla l'ultima azione: l'ultimo fotogramma di `past` torna in scena. */
+  const handleUndo = useCallback(() => {
+    if (past.length === 0) return;
+    const snapshot = past[past.length - 1];
+    setPast((prev) => prev.slice(0, -1));
+    setFuture((prev) => [...prev, cloneSnapshot(items, notes)]);
+    restoreSnapshot(snapshot);
+  }, [past, items, notes, restoreSnapshot]);
+
+  /** Ripristina l'azione annullata: simmetrico esatto di `handleUndo`. */
+  const handleRedo = useCallback(() => {
+    if (future.length === 0) return;
+    const snapshot = future[future.length - 1];
+    setFuture((prev) => prev.slice(0, -1));
+    setPast((prev) => appendSnapshot(prev, cloneSnapshot(items, notes)));
+    restoreSnapshot(snapshot);
+  }, [future, items, notes, restoreSnapshot]);
+
   /** Imposta l'intera lista di selezione (sostituzione, non toggle). */
   const handleSelectItems = useCallback((ids: string[]) => {
     setSelectedItemIds(ids);
@@ -46,6 +158,9 @@ export default function App() {
 
   // Aggiungi un nuovo collo al pianale, nel primo slot libero disponibile
   const handleAddItem = (pallet: PalletDefinition, options: AddItemOptions = {}) => {
+    // Fotogramma PRIMA della mutazione: l'aggiunta è un passo di Undo.
+    pushSnapshot();
+
     const width = options.width ?? (pallet.isBulk ? vehicle.width : pallet.width);
     const length = options.length ?? pallet.length;
 
@@ -95,6 +210,9 @@ export default function App() {
       name?: string,
       color?: string
     ) => {
+      // Fotogramma PRIMA della mutazione: l'intero lotto è UN passo di Undo.
+      pushSnapshot();
+
       const requested = Number.isFinite(quantity)
         ? Math.floor(quantity)
         : BATCH_DEFAULT_QUANTITY;
@@ -145,7 +263,7 @@ export default function App() {
 
       setSelectedItemIds([]);
     },
-    [vehicle]
+    [vehicle, pushSnapshot]
   );
 
   /**
@@ -181,12 +299,15 @@ export default function App() {
       const ids = Array.isArray(target) ? target : [target];
       if (ids.length === 0) return;
 
+      // Fotogramma PRIMA della mutazione (rinnovo, rinomina o ricolorazione).
+      pushSnapshot();
+
       const idSet = new Set(ids);
       setItems((prev) =>
         prev.map((item) => (idSet.has(item.id) ? { ...item, ...updates } : item))
       );
     },
-    []
+    [pushSnapshot]
   );
 
   // Rotazione di 90 gradi ancorata al baricentro, con riallineamento magnetico.
@@ -194,6 +315,9 @@ export default function App() {
   const handleRotateSelected = useCallback(() => {
     if (selectedItemIds.length === 0) return;
     const idSet = new Set(selectedItemIds);
+
+    // Fotogramma PRIMA della mutazione: la rotazione (anche di gruppo) è un passo.
+    pushSnapshot();
 
     setItems((prev) =>
       prev.map((item) => {
@@ -241,15 +365,26 @@ export default function App() {
         };
       })
     );
-  }, [selectedItemIds, vehicle]);
+  }, [selectedItemIds, vehicle, pushSnapshot]);
 
   // Cancellazione di TUTTI i colli selezionati (batch) + svuotamento selezione.
   const handleDeleteSelected = useCallback(() => {
     if (selectedItemIds.length === 0) return;
+
+    // Fotogramma PRIMA della mutazione: la cancellazione è un passo di Undo.
+    pushSnapshot();
+
     const idSet = new Set(selectedItemIds);
     setItems((prev) => prev.filter((item) => !idSet.has(item.id)));
     setSelectedItemIds([]);
-  }, [selectedItemIds]);
+  }, [selectedItemIds, pushSnapshot]);
+
+  /** Svuotamento completo del pianale ("Svuota"): un solo passo di Undo. */
+  const handleClearAll = useCallback(() => {
+    pushSnapshot();
+    setItems([]);
+    setSelectedItemIds([]);
+  }, [pushSnapshot]);
 
   /* ------------------------------------------------------------------------ *
    *  NOTE LATERALI DI CARICO (SIDE ANNOTATIONS)
@@ -273,29 +408,45 @@ export default function App() {
         ...noteData,
         id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       };
+      // Fotogramma PRIMA della mutazione: la creazione della nota è un passo.
+      pushSnapshot();
       setNotes((prev) => [...prev, newNote]);
       setSelectedNoteId(newNote.id);
       setSelectedItemIds([]);
     },
-    []
+    [pushSnapshot]
   );
 
-  /** Aggiorna titolo, testo o colore di una nota. */
-  const handleUpdateNote = useCallback((id: string, updates: Partial<SideNote>) => {
-    setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, ...updates } : note)));
-  }, []);
+  /** Aggiorna testo, colore, corpo o misure di una nota. */
+  const handleUpdateNote = useCallback(
+    (id: string, updates: Partial<SideNote>) => {
+      // Fotogramma PRIMA della mutazione: ogni modifica è un passo di Undo.
+      pushSnapshot();
+      setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, ...updates } : note)));
+    },
+    [pushSnapshot]
+  );
 
   /** Elimina una nota: la selezione viene azzerata per non lasciare riferimenti. */
-  const handleDeleteNote = useCallback((id: string) => {
-    setNotes((prev) => prev.filter((note) => note.id !== id));
-    setSelectedNoteId(null);
-  }, []);
+  const handleDeleteNote = useCallback(
+    (id: string) => {
+      // Fotogramma PRIMA della mutazione: l'eliminazione è un passo di Undo.
+      pushSnapshot();
+      setNotes((prev) => prev.filter((note) => note.id !== id));
+      setSelectedNoteId(null);
+    },
+    [pushSnapshot]
+  );
 
   /**
    * Trascinamento libero in 2D di una nota: si aggiornano **sia** l'ascissa X sia
    * la quota Y (cm reali), così la card può vivere ovunque attorno al camion —
    * a destra della parete (posizione di nascita), a sinistra (`x < 0`), lungo il
    * pianale o in coda. I limiti di sicurezza sono applicati dal canvas.
+   *
+   * Nessuno snapshot qui: il movimento del mouse non deve generare fotogrammi.
+   * Il canvas apre il gesto con `onBeginHistoryGesture` al `pointerDown` e lo
+   * convalida al `pointerUp` (l'intero trascinamento = 1 passo di Undo).
    */
   const handleUpdateNotePos = useCallback((id: string, x: number, y: number) => {
     setNotes((prev) =>
@@ -310,6 +461,9 @@ export default function App() {
    * basso-destro: larghezza e altezza vengono clampate nei limiti consentiti
    * (70–300 cm × 40–400 cm). L'altezza diventa esplicita, quindi da quel momento
    * il box non si riadatta più da solo al testo.
+   *
+   * Anche qui nessuno snapshot per frame: il gesto della maniglia è aperto e
+   * convalidato dal canvas (un solo passo di Undo per l'intero ridimensionamento).
    */
   const handleUpdateNoteSize = useCallback(
     (id: string, size: { width: number; height: number }) => {
@@ -324,7 +478,7 @@ export default function App() {
     []
   );
 
-  // Gestione scorciatoie da tastiera (Spazio e Canc)
+  // Gestione scorciatoie da tastiera (Spazio, Canc e Undo / Redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
@@ -332,6 +486,26 @@ export default function App() {
       }
       // Anche la textarea della nota è un campo di scrittura: nessuna scorciatoia.
       if (e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+
+      // Undo / Redo — `Ctrl / Cmd + Z` annulla, `Ctrl / Cmd + Shift + Z` e
+      // `Ctrl / Cmd + Y` ripristinano. Nei campi di testo il browser conserva il
+      // proprio undo nativo (il listener esce prima, vedi le guardie in testa).
+      if ((e.ctrlKey || e.metaKey) && key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && key === 'y') {
+        e.preventDefault();
+        handleRedo();
         return;
       }
 
@@ -343,8 +517,7 @@ export default function App() {
         // Priorità: se è attiva una nota (e nessun collo è selezionato) il tasto
         // `Canc` elimina la nota; altrimenti elimina i colli selezionati.
         if (selectedNoteId !== null && selectedItemIds.length === 0) {
-          setNotes((prev) => prev.filter((note) => note.id !== selectedNoteId));
-          setSelectedNoteId(null);
+          handleDeleteNote(selectedNoteId);
         } else {
           handleDeleteSelected();
         }
@@ -353,7 +526,15 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRotateSelected, handleDeleteSelected, selectedNoteId, selectedItemIds]);
+  }, [
+    handleRotateSelected,
+    handleDeleteSelected,
+    handleDeleteNote,
+    handleUndo,
+    handleRedo,
+    selectedNoteId,
+    selectedItemIds,
+  ]);
 
   // Lista dei colli selezionati, nell'ordine di selezione.
   const selectedItems = selectedItemIds
@@ -382,6 +563,8 @@ export default function App() {
             onUpdateNotePos={handleUpdateNotePos}
             onUpdateNoteSize={handleUpdateNoteSize}
             onUpdateItemsPos={handleUpdateItemsPos}
+            onBeginHistoryGesture={handleBeginHistoryGesture}
+            onCommitHistoryGesture={handleCommitHistoryGesture}
           />
         </div>
 
@@ -395,10 +578,11 @@ export default function App() {
             onDeleteSelected={handleDeleteSelected}
             onUpdateItemProperties={handleUpdateItemProperties}
             onAddBatch={handleAddBatch}
-            onClearAll={() => {
-              setItems([]);
-              setSelectedItemIds([]);
-            }}
+            onClearAll={handleClearAll}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             notes={notes}
             selectedNoteId={selectedNoteId}
             onAddNote={handleAddNote}

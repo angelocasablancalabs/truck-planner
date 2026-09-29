@@ -224,6 +224,9 @@ interface DragState {
   startY: number;
   primaryWidth: number;
   primaryLength: number;
+  /** `true` appena il trascinamento ha davvero spostato il gruppo (cm reali):
+   *  è la condizione con cui il gesto viene convalidato nella cronologia. */
+  moved: boolean;
   /** Tutti i membri trascinati (incluso il primario) con le posizioni iniziali. */
   members: {
     id: string;
@@ -264,6 +267,8 @@ interface NoteResizeState {
   /** Dimensioni di partenza del box (cm). */
   startWidth: number;
   startHeight: number;
+  /** `true` appena larghezza o altezza sono cambiate davvero. */
+  moved: boolean;
 }
 
 interface TruckCanvasProps {
@@ -285,6 +290,15 @@ interface TruckCanvasProps {
   /** Ridimensionamento della card di nota (larghezza / altezza in cm). */
   onUpdateNoteSize: (id: string, size: { width: number; height: number }) => void;
   onUpdateItemsPos: (updates: ItemPositionUpdate[]) => void;
+  /**
+   * Cronologia Undo / Redo — Regola del Drag:
+   * il canvas apre il gesto al `pointerDown` (`onBeginHistoryGesture`), non
+   * registra nulla durante il `pointerMove` e lo convalida al `pointerUp`
+   * (`onCommitHistoryGesture(true)`) solo se il trascinamento ha cambiato
+   * davvero le coordinate: l'intero drag vale così **un singolo passo** di Undo.
+   */
+  onBeginHistoryGesture: () => void;
+  onCommitHistoryGesture: (changed: boolean) => void;
 }
 
 export const TruckCanvas: React.FC<TruckCanvasProps> = ({
@@ -300,6 +314,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   onUpdateNotePos,
   onUpdateNoteSize,
   onUpdateItemsPos,
+  onBeginHistoryGesture,
+  onCommitHistoryGesture,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -400,6 +416,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     (e.target as Element).setPointerCapture(e.pointerId);
     onSelectNote(note.id);
+    // Apre il gesto in cronologia: il fotogramma verrà convalidato al rilascio
+    // solo se la nota si è davvero spostata (1 drag = 1 passo di Undo).
+    onBeginHistoryGesture();
     draggingNote.current = {
       id: note.id,
       startCursorX: cursor.x,
@@ -429,12 +448,15 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     (e.target as Element).setPointerCapture(e.pointerId);
     onSelectNote(note.id);
+    // Anche il ridimensionamento è un gesto unico agli occhi della cronologia.
+    onBeginHistoryGesture();
     resizingNote.current = {
       id: note.id,
       startCursorX: cursor.x,
       startCursorY: cursor.y,
       startWidth: note.width,
       startHeight: height,
+      moved: false,
     };
   };
 
@@ -652,6 +674,10 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         length: other.length,
       }));
 
+    // Apre il gesto in cronologia PRIMA che il pointerMove tocchi la stiva:
+    // durante il movimento non verrà registrato nulla.
+    onBeginHistoryGesture();
+
     draggingItem.current = {
       primaryId: item.id,
       startCursor: cursor,
@@ -659,6 +685,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       startY: item.y,
       primaryWidth: item.width,
       primaryLength: item.length,
+      moved: false,
       members,
     };
   };
@@ -679,6 +706,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         Math.min(NOTE_MAX_HEIGHT_CM, resize.startHeight + (cursor.y - resize.startCursorY))
       );
       if (width !== resize.startWidth || height !== resize.startHeight) {
+        resize.moved = true;
         onUpdateNoteSize(resize.id, { width: toPrecision(width), height: toPrecision(height) });
       }
       return;
@@ -784,6 +812,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     if (dxMin <= dxMax) dx = Math.max(dxMin, Math.min(dxMax, dx));
     if (dyMin <= dyMax) dy = Math.max(dyMin, Math.min(dyMax, dy));
 
+    // Spostamento reale: il gesto avrà diritto a un passo di Undo al rilascio.
+    if (dx !== 0 || dy !== 0) drag.moved = true;
+
     const updates: ItemPositionUpdate[] = drag.members.map((member) => ({
       id: member.id,
       x: toPrecision(member.startX + dx),
@@ -822,18 +853,23 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     }
 
     // Rilascio dopo il ridimensionamento di una nota: la selezione resta e il
-    // click di sfondo non deve azzerarla.
-    if (resizingNote.current) {
+    // click di sfondo non deve azzerarla. La cronologia convalida il gesto solo
+    // se le dimensioni sono davvero cambiate.
+    const resize = resizingNote.current;
+    if (resize) {
       resizingNote.current = null;
+      onCommitHistoryGesture(resize.moved);
       suppressBackgroundClick.current = true;
       return;
     }
 
     // Rilascio dopo il trascinamento di una nota laterale: la selezione della
     // nota resta, mentre il click di sfondo non deve azzerarla.
-    if (draggingNote.current) {
-      if (draggingNote.current.moved) suppressBackgroundClick.current = true;
+    const noteDrag = draggingNote.current;
+    if (noteDrag) {
+      if (noteDrag.moved) suppressBackgroundClick.current = true;
       draggingNote.current = null;
+      onCommitHistoryGesture(noteDrag.moved);
       return;
     }
 
@@ -848,6 +884,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     }
 
     if (panningView.current?.moved) suppressBackgroundClick.current = true;
+
+    // Trascinamento di colli concluso: l'intero gesto entra in cronologia come
+    // UN solo passo (e solo se ha davvero spostato qualcosa).
+    const itemDrag = draggingItem.current;
+    if (itemDrag) onCommitHistoryGesture(itemDrag.moved);
 
     panningView.current = null;
     setIsPanning(false);

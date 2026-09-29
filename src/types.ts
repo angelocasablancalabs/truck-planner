@@ -85,6 +85,22 @@ export interface SideNote {
   fontSize?: 11 | 14 | 18 | number;
 }
 
+/**
+ * Fotogramma della cronologia Undo / Redo (snapshot engine).
+ *
+ * Contiene **solo lo stato della stiva** — i colli e le note laterali — che è
+ * l'unico dato su cui l'operatore agisce in modo distruttivo. Selezione, vista e
+ * densità etichette sono stati di interfaccia e restano fuori dalla cronologia.
+ *
+ * Le due liste sono sempre **copie profonde**: uno snapshot non condivide alcun
+ * riferimento con lo stato vivo, quindi non può essere corrotto da mutazioni
+ * successive.
+ */
+export interface HistorySnapshot {
+  items: PlacedItem[];
+  notes: SideNote[];
+}
+
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */
 export interface AddItemOptions {
   /** Larghezza imposta in cm (es. 100 per Punta, 120 per Piatto). */

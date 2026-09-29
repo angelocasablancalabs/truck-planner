@@ -43,6 +43,8 @@ import {
   Printer,
   Download,
   FileText,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 
 /** Esito dell'ultima esportazione immagine (feedback temporaneo sul pulsante). */
@@ -101,6 +103,14 @@ interface ControlDeckProps {
   onClearAll: () => void;
   onUpdateItemProperties: (target: string | string[], updates: Partial<PlacedItem>) => void;
   /**
+   * Cronologia Undo / Redo: stato delle due pile e azioni esposte dal motore di
+   * `App.tsx` (i micro-pulsanti dell'header e le scorciatoie le condividono).
+   */
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  /**
    * Motore batch first-fit: stiva `quantity` colli di un solo formato, già
    * etichettati col nome cliente e col colore scelti nel cassetto.
    */
@@ -150,6 +160,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onDeleteSelected,
   onClearAll,
   onUpdateItemProperties,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onAddBatch,
   notes,
   selectedNoteId,
@@ -529,24 +543,63 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
             Aggiungi Colli
           </label>
-          <button
-            type="button"
-            onClick={() => {
-              if (items.length > 0 && window.confirm('Sei sicuro di voler svuotare completamente il pianale?')) {
-                onClearAll();
+          <div className="flex items-center gap-1.5">
+            {/* Pulsante Undo (Solo Icona) */}
+            <button
+              type="button"
+              id="btn-undo"
+              onClick={onUndo}
+              disabled={!canUndo}
+              title="Annulla (Ctrl / Cmd + Z)"
+              className={`p-1 rounded transition ${
+                !canUndo
+                  ? 'text-slate-300 opacity-40 cursor-not-allowed'
+                  : 'text-slate-600 hover:text-blue-600 hover:bg-slate-100 cursor-pointer'
+              }`}
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Pulsante Redo (Solo Icona) */}
+            <button
+              type="button"
+              id="btn-redo"
+              onClick={onRedo}
+              disabled={!canRedo}
+              title="Ripristina (Ctrl / Cmd + Y)"
+              className={`p-1 rounded transition ${
+                !canRedo
+                  ? 'text-slate-300 opacity-40 cursor-not-allowed'
+                  : 'text-slate-600 hover:text-blue-600 hover:bg-slate-100 cursor-pointer'
+              }`}
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Separatore sottile */}
+            <span className="w-px h-3.5 bg-slate-200 mx-0.5" />
+
+            {/* Pulsante Svuota esistente */}
+            <button
+              type="button"
+              id="btn-clear-all"
+              onClick={() => {
+                if (items.length > 0 && window.confirm('Sei sicuro di voler svuotare completamente il pianale?')) {
+                  onClearAll();
+                }
+              }}
+              disabled={items.length === 0}
+              title={items.length === 0 ? 'Il pianale è già vuoto' : 'Svuota tutto il carico'}
+              className={
+                items.length === 0
+                  ? 'flex items-center gap-1 text-[11px] font-medium text-slate-300 cursor-not-allowed'
+                  : 'flex items-center gap-1 text-red-800 hover:text-red-900 hover:bg-red-50 border border-transparent hover:border-red-200 cursor-pointer px-1.5 py-0.5 rounded transition font-medium text-[11px]'
               }
-            }}
-            disabled={items.length === 0}
-            title={items.length === 0 ? 'Il pianale è già vuoto' : 'Svuota tutto il carico'}
-            className={
-              items.length === 0
-                ? 'flex items-center gap-1 text-[11px] font-medium text-slate-300 cursor-not-allowed'
-                : 'flex items-center gap-1 text-red-800 hover:text-red-900 hover:bg-red-50 border border-transparent hover:border-red-200 cursor-pointer px-1.5 py-0.5 rounded transition font-medium text-[11px]'
-            }
-          >
-            <Trash2 className="w-3 h-3" />
-            Svuota
-          </button>
+            >
+              <Trash2 className="w-3 h-3" />
+              Svuota
+            </button>
+          </div>
         </div>
         <div className="space-y-1">
           {PALLET_CATALOG.filter((p) => !p.isBulk).map((pallet) => {
@@ -1159,6 +1212,14 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Elimina collo / nota</span>
               <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Canc</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Annulla</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Ctrl / Cmd + Z</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Ripristina</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Ctrl / Cmd + Y</kbd>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Selezione multipla</span>
