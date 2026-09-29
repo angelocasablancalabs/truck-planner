@@ -259,10 +259,10 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
   /**
    * Contatore dinamico LDM (metri lineari occupati), calcolato con la **Regola
-   * del Baricentro** dalla funzione pura condivisa `calculateLdmMetrics`: un
-   * collo appartiene al lato in cui ricade il proprio centro geometrico, mentre
-   * i colli a tutta larghezza (es. Sfuso) occupano inevitabilmente entrambi i
-   * lati. La stessa funzione alimenta l'export PNG e la scheda di stampa A4,
+   * della Corsia di Parete** dalla funzione pura condivisa `calculateLdmMetrics`:
+   * un collo impegna una corsia di parete solo se la tocca davvero, mentre i
+   * colli a tutta larghezza (es. Sfuso) occupano inevitabilmente entrambe le
+   * corsie. La stessa funzione alimenta l'export PNG e la scheda di stampa A4,
    * quindi le tre rese non possono divergere.
    */
   const midX = vehicle.width / 2;
@@ -960,7 +960,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             )}
 
             {/* Contatore dinamico LDM (metri lineari occupati), dalla funzione
-                condivisa `calculateLdmMetrics` con la Regola del Baricentro.
+                condivisa `calculateLdmMetrics` con la Regola della Corsia di
+                Parete.
                 - Carico simmetrico: singolo indicatore a sinistra, linea guida
                   continua alla Y massima, badge scuro `#1E293B`.
                 - Carico asimmetrico: due indicatori tratteggiati, ciascuno sulla

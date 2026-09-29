@@ -51,16 +51,33 @@ const clampYWithOverhang = (value: number, vehicleLength: number, itemLength: nu
 };
 
 /**
- * Ingombro LDM (metri lineari occupati) di un pianale, calcolato con la
- * **Regola del Baricentro** sui due lati dell'asse di mezzeria.
+ * Ampiezza (cm) della **corsia di parete** (Wall Lane): la fascia di pianale a
+ * ridosso di ciascuna sponda laterale entro cui un collo è considerato
+ * appoggiato a quella parete.
  *
- * Un collo non viene più assegnato a un lato in base a un generico sconfinamento
- * della mezzeria (che faceva contare un collo "a cavallo" su entrambi i lati, o
- * nessuno dei due), ma in base a **dove ricade il proprio centro geometrico**:
- * - `cx < midX` → lato sinistro;
- * - `cx >= midX` → lato destro;
+ * - Fascia parete SINISTRA: `X <= 50 cm`;
+ * - Fascia parete DESTRA: `X + W >= vehicle.width - 50 cm`.
+ */
+export const WALL_ZONE_THRESHOLD = 50;
+
+/**
+ * Ingombro LDM (metri lineari occupati) di un pianale, calcolato con la
+ * **Regola della Corsia di Parete** (Wall Lane Rule).
+ *
+ * Un collo impegna una corsia di parete solo se la **tocca davvero**:
  * - collo a **tutta larghezza** (larghezza ≥ 60% della larghezza utile, es.
- *   `SFUSO`) → occupa inevitabilmente entrambi i lati.
+ *   `SFUSO`) → occupa inevitabilmente entrambe le corsie;
+ * - collo che appoggia alla fascia sinistra (`X <= 50`) → corsia sinistra;
+ * - collo che raggiunge la fascia destra (`X + W >= width − 50`) → corsia destra;
+ * - collo **puramente centrale** (nessuna delle due fasce) → viene attribuito
+ *   alla metà di pianale in cui **inizia** (`X < midX` → sinistra, altrimenti
+ *   destra). Attribuirlo al proprio baricentro era la causa del caso limite
+ *   diagnosticato: in una fila da 4 carrelli EC (`X = 0, 61, 122, 183`) il terzo
+ *   carrello, con centro a 152,5 cm > mezzeria (125 cm), risultava copertura del
+ *   lato destro pur non raggiungendo la fascia di parete destra (200 cm),
+ *   facendo sparire l'indicatore destro con la **4ª colonna completamente
+ *   vuota**. Con il bordo sinistro il terzo carrello (X = 122 < 125) resta sul
+ *   lato sinistro e la corsia destra vuota viene finalmente segnalata.
  */
 export interface LdmMetrics {
   /** Ingombro (cm) del lato sinistro, misurato dalla Cabina. */
@@ -74,7 +91,8 @@ export interface LdmMetrics {
 }
 
 /**
- * Calcola l'ingombro LDM dei due lati del pianale con la Regola del Baricentro.
+ * Calcola l'ingombro LDM dei due lati del pianale con la Regola della Corsia di
+ * Parete.
  *
  * Funzione **pura** condivisa da canvas a schermo (`TruckCanvas.tsx`), export PNG
  * (`utils/export.ts`) e scheda di stampa A4 (`PrintReport.tsx`): un'unica fonte
@@ -86,21 +104,44 @@ export interface LdmMetrics {
 export function calculateLdmMetrics(vehicle: VehicleConfig, items: PlacedItem[]): LdmMetrics {
   const midX = vehicle.width / 2;
   const wideThreshold = vehicle.width * 0.6; // colli a tutta larghezza (es. Sfuso)
+  const wallZone = WALL_ZONE_THRESHOLD; // cm dalla parete
+
   let leftY = 0;
   let rightY = 0;
 
   for (const item of items) {
     const bottom = item.y + item.length;
-    if (item.width >= wideThreshold) {
+    const rightEdge = item.x + item.width;
+    const isWide = item.width >= wideThreshold;
+
+    if (isWide) {
+      // Collo a tutta larghezza (es. Sfuso): impegna entrambe le corsie.
       if (bottom > leftY) leftY = bottom;
       if (bottom > rightY) rightY = bottom;
-    } else {
-      // Regola del Baricentro: guarda dove ricade il centro geometrico del collo
-      const cx = item.x + item.width / 2;
-      if (cx < midX) {
-        if (bottom > leftY) leftY = bottom;
-      } else {
-        if (bottom > rightY) rightY = bottom;
+      continue;
+    }
+
+    // Corsia di parete: il collo deve TOCCARE la fascia per impegnare quel lato.
+    const touchesLeftWallZone = item.x <= wallZone;
+    const touchesRightWallZone = rightEdge >= vehicle.width - wallZone;
+
+    if (touchesLeftWallZone && bottom > leftY) {
+      leftY = bottom;
+    }
+    if (touchesRightWallZone && bottom > rightY) {
+      rightY = bottom;
+    }
+
+    // Fallback per i colli puramente centrali che non toccano nessuna delle due
+    // fasce di parete: il lato è deciso dal **bordo sinistro** (dove il collo
+    // inizia), non dal baricentro, così una fila da 4 che si ferma alla 3ª
+    // colonna non può far sembrare coperta la corsia di parete destra rimasta
+    // vuota.
+    if (!touchesLeftWallZone && !touchesRightWallZone) {
+      if (item.x < midX && bottom > leftY) {
+        leftY = bottom;
+      } else if (item.x >= midX && bottom > rightY) {
+        rightY = bottom;
       }
     }
   }

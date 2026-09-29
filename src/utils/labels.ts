@@ -99,6 +99,9 @@ export const splitLabelIntoTwoLines = (name: string): [string, string] | null =>
 /**
  * ID del `clipPath` che ritaglia il testo dentro il singolo collo.
  * L'ID è normalizzato per essere sempre valido come riferimento SVG.
+ *
+ * Nota: il clip è indispensabile perché nessuna etichetta possa traboccare sui
+ * colli adiacenti, qualunque sia la densità scelta dall'operatore.
  */
 export const clipIdForItem = (itemId: string): string =>
   `clip-${itemId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;

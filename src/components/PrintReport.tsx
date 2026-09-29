@@ -100,8 +100,8 @@ interface PrintReportProps {
  *
  * Il disegno riporta gli stessi riferimenti metrici del canvas a schermo:
  * quota nominale 13,20 m (sui mezzi che la raggiungono) e indicatori LDM
- * calcolati dalla funzione condivisa `calculateLdmMetrics` (Regola del
- * Baricentro). Il dato ufficiale dei metri lineari è inoltre esposto come riga
+ * calcolati dalla funzione condivisa `calculateLdmMetrics` (Regola della Corsia
+ * di Parete). Il dato ufficiale dei metri lineari è inoltre esposto come riga
  * dedicata nella tabella riassuntiva.
  */
 export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelDensity }) => {
@@ -118,9 +118,9 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
   const rows = buildSummaryRows(items);
 
   /**
-   * Ingombro LDM dei due lati (Regola del Baricentro), dalla stessa funzione
-   * pura che alimenta canvas a schermo ed export PNG: la scheda stampata non
-   * può divergere da ciò che l'operatore vede sul pianale.
+   * Ingombro LDM dei due lati (Regola della Corsia di Parete), dalla stessa
+   * funzione pura che alimenta canvas a schermo ed export PNG: la scheda
+   * stampata non può divergere da ciò che l'operatore vede sul pianale.
    */
   const ldm = calculateLdmMetrics(vehicle, items);
   /** Asse di mezzeria: separa i due indicatori nel caso asimmetrico. */
@@ -489,7 +489,8 @@ export const PrintReport: React.FC<PrintReportProps> = ({ vehicle, items, labelD
           </tbody>
           <tfoot>
             {/* Dato ufficiale LDM: riga dedicata ed evidenziata, calcolata dalla
-                funzione condivisa `calculateLdmMetrics` (Regola del Baricentro). */}
+                funzione condivisa `calculateLdmMetrics` (Regola della Corsia di
+                Parete). */}
             {showsLdmRow && (
               <tr
                 id="print-ldm-row"

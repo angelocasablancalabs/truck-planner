@@ -376,11 +376,11 @@ export const buildPianoSvg = (
   }
 
   // Contatore dinamico LDM (metri lineari occupati), dalla funzione pura
-  // condivisa `calculateLdmMetrics` (Regola del Baricentro): carico simmetrico →
-  // singolo indicatore a sinistra con linea guida continua; carico asimmetrico →
-  // due indicatori tratteggiati (metà SX e metà DX), con il lato più carico in
-  // scuro primario e quello meno carico in slate intermedio. Con densità
-  // `minimal` l'immagine resta pulita: nessuna linea e nessun badge.
+  // condivisa `calculateLdmMetrics` (Regola della Corsia di Parete): carico
+  // simmetrico → singolo indicatore a sinistra con linea guida continua; carico
+  // asimmetrico → due indicatori tratteggiati (metà SX e metà DX), con il lato
+  // più carico in scuro primario e quello meno carico in slate intermedio. Con
+  // densità `minimal` l'immagine resta pulita: nessuna linea e nessun badge.
   const ldm = calculateLdmMetrics(vehicle, items);
   const maxOccupiedY = ldm.maxOccupiedY;
   /** Asse di mezzeria del pianale (cm): separa i due indicatori asimmetrici. */
