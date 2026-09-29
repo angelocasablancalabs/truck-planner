@@ -15,9 +15,13 @@ import {
   LDM_BADGE_CENTER_X,
   LDM_BADGE_COLOR,
   LDM_BADGE_LEFT_X,
+  LDM_BADGE_MUTED_COLOR,
   LDM_GUIDE_COLOR,
+  LDM_SYMMETRY_TOLERANCE_CM,
   NOMINAL_QUOTA_CM,
   NOMINAL_QUOTA_COLOR,
+  ldmBadgeRightCenterX,
+  ldmBadgeRightLeftX,
 } from '../constants';
 import {
   clipIdForItem,
@@ -41,6 +45,14 @@ const PAN_TOP_MARGIN_PX = 40;
 const PAN_BOTTOM_MARGIN_PX = 50;
 /** Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo. */
 const PAN_LABEL_MARGIN_CM = 80;
+/**
+ * Altezza (cm reali) della fascia sopra la Cabina occupata dalla didascalia
+ * `▲ CABINA ▲` e dalle quote: a zoom elevato questa distanza cresce in pixel e
+ * la scritta usciva tagliata fuori dal bordo alto del viewport. Il limite di pan
+ * del Caso B la include, scalata per lo zoom, così resta sempre interamente
+ * visibile a 100%, 200% e 400%, senza spazi vuoti eccessivi.
+ */
+const CABINA_LABEL_OFFSET_CM = 32;
 
 /**
  * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
@@ -50,8 +62,9 @@ const PAN_LABEL_MARGIN_CM = 80;
  *   (`(vehicleLength + 80) * zoom <= containerH`): il pianale resta centrato
  *   verticalmente nel viewport e non può scivolare via.
  * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
- *   si arresta a ridosso del bordo alto (`maxPanY = 40`) e le Porte posteriori
- *   a ridosso di quello basso (`minPanY = containerH - 50 - vehicleLength * zoom`).
+ *   si arresta a ridosso del bordo alto (`maxPanY = 40 + 32 * zoom`, che tiene
+ *   dentro anche la didascalia `▲ CABINA ▲`) e le Porte posteriori a ridosso di
+ *   quello basso (`minPanY = containerH - 50 - vehicleLength * zoom`).
  */
 const clampPanY = (
   panY: number,
@@ -67,7 +80,7 @@ const clampPanY = (
   }
 
   // Caso B: il camion è più lungo dello schermo → clamp rigoroso ai due bordi.
-  const maxPanY = PAN_TOP_MARGIN_PX;
+  const maxPanY = PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM * zoom;
   const minPanY = containerH - PAN_BOTTOM_MARGIN_PX - vehicleLength * zoom;
   return Math.max(minPanY, Math.min(maxPanY, panY));
 };
@@ -234,9 +247,34 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   // Quota nominale 13,20 m: tracciata solo sui mezzi che la raggiungono.
   const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
 
-  // Contatore dinamico LDM (metri lineari occupati): Y massima dei colli stivati.
-  const maxOccupiedY = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  /**
+   * Contatore dinamico LDM (metri lineari occupati), calcolato SEPARATAMENTE
+   * sui due lati della mezzeria del pianale: un carico asimmetrico (es. SX 1,60 m
+   * e DX 2,00 m) non può più essere mascherato da un unico valore massimo.
+   *
+   * Un collo a cavallo della mezzeria contribuisce a entrambi i lati, come è
+   * corretto che sia: occupa metri lineari su tutta la larghezza.
+   */
+  const midX = vehicle.width / 2;
+  const leftOccupiedY = items
+    .filter((item) => item.x < midX)
+    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  const rightOccupiedY = items
+    .filter((item) => item.x + item.width > midX)
+    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
+
+  const maxOccupiedY = Math.max(leftOccupiedY, rightOccupiedY);
   const hasLdmBadge = maxOccupiedY > 0;
+  // Sotto la tolleranza di 1 cm i due lati sono considerati simmetrici.
+  const ldmIsSymmetric =
+    Math.abs(leftOccupiedY - rightOccupiedY) < LDM_SYMMETRY_TOLERANCE_CM;
+  // Lato più carico = badge scuro primario; lato meno carico = slate intermedio.
+  const leftLdmIsHeavier = leftOccupiedY >= rightOccupiedY;
+  const leftLdmBadgeColor = leftLdmIsHeavier ? LDM_BADGE_COLOR : LDM_BADGE_MUTED_COLOR;
+  const rightLdmBadgeColor = leftLdmIsHeavier ? LDM_BADGE_MUTED_COLOR : LDM_BADGE_COLOR;
+  // Badge del lato destro: subito oltre la parete destra del pianale.
+  const rightLdmBadgeLeftX = ldmBadgeRightLeftX(vehicle.width);
+  const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
 
   // --- Misura del viewport --------------------------------------------------
   useEffect(() => {
@@ -882,9 +920,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               </g>
             )}
 
-            {/* Contatore dinamico LDM: linea guida alla Y massima occupata e badge
-                scuro ad alto contrasto nel righello di sinistra. */}
-            {hasLdmBadge && (
+            {/* Contatore dinamico LDM (metri lineari occupati).
+                - Carico simmetrico (|SX − DX| < 1 cm): singolo indicatore a
+                  sinistra, linea guida continua alla Y massima, badge scuro.
+                - Carico asimmetrico: due indicatori tratteggiati, ciascuno sulla
+                  propria metà pianale; il lato più carico ha il badge scuro
+                  primario, quello meno carico lo slate intermedio più chiaro.
+                  Il badge destro vive FUORI dalla parete destra. */}
+            {hasLdmBadge && ldmIsSymmetric && (
               <g>
                 <line
                   x1={0}
@@ -893,7 +936,6 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   y2={maxOccupiedY}
                   stroke={LDM_GUIDE_COLOR}
                   strokeWidth="1"
-                  strokeDasharray="6 4"
                 />
                 <rect
                   x={LDM_BADGE_LEFT_X}
@@ -910,6 +952,64 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   className="text-[10px] font-bold fill-white"
                 >
                   ▶ {(maxOccupiedY / 100).toFixed(2)} m
+                </text>
+              </g>
+            )}
+
+            {hasLdmBadge && !ldmIsSymmetric && (
+              <g>
+                {/* Indicatore SX: metà sinistra del pianale. */}
+                <line
+                  x1={0}
+                  y1={leftOccupiedY}
+                  x2={midX}
+                  y2={leftOccupiedY}
+                  stroke={LDM_GUIDE_COLOR}
+                  strokeWidth="1"
+                  strokeDasharray="6 4"
+                />
+                <rect
+                  x={LDM_BADGE_LEFT_X}
+                  y={leftOccupiedY - LDM_BADGE.height / 2}
+                  width={LDM_BADGE.width}
+                  height={LDM_BADGE.height}
+                  rx={3}
+                  fill={leftLdmBadgeColor}
+                />
+                <text
+                  x={LDM_BADGE_CENTER_X}
+                  y={leftOccupiedY + 3.5}
+                  textAnchor="middle"
+                  className="text-[10px] font-bold fill-white"
+                >
+                  ▶ {(leftOccupiedY / 100).toFixed(2)} m
+                </text>
+
+                {/* Indicatore DX: metà destra del pianale, badge oltre la parete. */}
+                <line
+                  x1={midX}
+                  y1={rightOccupiedY}
+                  x2={vehicle.width}
+                  y2={rightOccupiedY}
+                  stroke={LDM_GUIDE_COLOR}
+                  strokeWidth="1"
+                  strokeDasharray="6 4"
+                />
+                <rect
+                  x={rightLdmBadgeLeftX}
+                  y={rightOccupiedY - LDM_BADGE.height / 2}
+                  width={LDM_BADGE.width}
+                  height={LDM_BADGE.height}
+                  rx={3}
+                  fill={rightLdmBadgeColor}
+                />
+                <text
+                  x={rightLdmBadgeCenterX}
+                  y={rightOccupiedY + 3.5}
+                  textAnchor="middle"
+                  className="text-[10px] font-bold fill-white"
+                >
+                  ◀ {(rightOccupiedY / 100).toFixed(2)} m
                 </text>
               </g>
             )}

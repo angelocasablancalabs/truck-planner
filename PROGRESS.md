@@ -65,7 +65,9 @@
 - **Modifica Nome / Cliente:** input di testo nel pannello `selectedItem`: l'aggiornamento è istantaneo e si riflette sia sul testo dentro il rettangolo nel canvas sia sul riepilogo stiva.
 - **Palette Colori Rapida:** riga di 7 pastiglie tonde (fill pastello + bordo alto contrasto, pastiglia attiva evidenziata con ring blu):
   - Grigio `#E2E8F0` / `#475569` — Giallo `#FEF08A` / `#CA8A04` — Arancio `#FED7AA` / `#EA580C` — Verde `#DCFCE7` / `#16A34A` — Azzurro `#BAE6FD` / `#0284C7` — Lilla `#F3E8FF` / `#9333EA` — Rosa/Corallo `#FFE4E6` / `#E11D48`.
+  - *(Logica storica, superata dalla **matrice 21 colori** della sezione O: le pastiglie applicavano anche un `borderColor` dedicato, ora il bordo è sempre `#334155`.)*
 - **Callback di stato:** `handleUpdateItemProperties(id, updates: Partial<PlacedItem>)` in `App.tsx`, patch immutabile passata a `ControlDeck` (aggiorna `color` e `borderColor` sul collo selezionato).
+  - *(Dalla sezione O la patch inviata dal selettore colori contiene il solo `color`.)*
 
 ### H. Selezione Multipla, Rettangolo Lasso & Azioni Batch (Sprint B)
 - **Stato globale evoluto:** `selectedItemIds: string[]` (default `[]`) al posto del singolo `selectedItemId`, con `handleSelectItems(ids)`.
@@ -94,7 +96,7 @@
   - **Formato**: `PLT EUR`, `PLT INDU`, `PLT ½ EUR`, `CC`, `EC` (default `PLT EUR`).
   - **Toggle Orientamento** `↔ Piatto` / `↕ Punta` (default Piatto).
   - **Cliente**: input testuale con placeholder `Es. COOP`.
-  - **Pallino colore** cliccabile: cicla i 7 colori pastello, assegnati **a rotazione automatica** ad ogni nuova riga (tappe distinguibili a vista).
+  - **Pallino colore** ~~cliccabile: cicla i 7 colori pastello~~ → **matrice colori 7 × 3** cliccabile (sezione O), assegnata **a rotazione automatica** (tonalità media) ad ogni nuova riga (tappe distinguibili a vista).
   - **Cestino** (`Trash2` `w-3.5 h-3.5`) per rimuovere la riga.
 - **`+ Aggiungi Riga Spedizione`** in coda alla lista.
 - **Applicazione selezionabile:** `Sostituisci` (default, azzera il pianale) / `Accoda` (mantiene il carico e prosegue la sequenza).
@@ -158,19 +160,45 @@
    - Zoom 240% (7 click su `+`): HUD `240%`, `(L+80)×zoom = 1763 > 813` → Caso B attivo; rotellina **e** drag del mouse verso il basso bloccano `pan.y` a **40.00** (margine Cabina); rotellina **e** drag verso l'alto bloccano `pan.y` a **−900.20** = `containerH − 50 − L×zoom` (margine Porte).
    - Reset/Adatta a schermo → `pan.y = 60.00` (di nuovo centrato). Didascalie presenti e prive di parentesi su canvas, scheda A4 `#print-report` e SVG esportato da `buildPianoSvg`. Nessun errore in console.
 
+### O. Finiture di Precisione — Bordi Antracite Rigidi, Cabina ad Alto Zoom, Doppio LDM Asimmetrico & Matrice 21 Tonalità (Sprint F)
+1. **Bordo antracite RIGIDO su ogni collo** (`App.tsx`, `ControlDeck.tsx`, `constants.ts`, `types.ts`): qualunque sia la tinta assegnata a un collo — in inserimento da catalogo, in stiva sequenziale o con un cambio colore successivo — il `borderColor` resta **sempre** `ITEM_BORDER_COLOR` (`#334155`). Solo l'allarme (`hasCollision || isOutOfBounds` → `#EF4444`) e la selezione (`#2563EB`) hanno il diritto di sovrascriverlo.
+   - `CUSTOM_PALLET.borderColor`: da `#475569` a `ITEM_BORDER_COLOR`.
+   - `handleAddItem` e `handleExecuteSequence` (`App.tsx`) scrivono `borderColor: ITEM_BORDER_COLOR`, non più il bordo del catalogo o della tappa.
+   - Rimosso il campo `borderColor` da `SequenceBatchItem` (`types.ts`): il contorno non è più una proprietà di riga, quindi non può più divergere per costruzione.
+   - La matrice colori di `ControlDeck.tsx` invia **solo** `{ color: selectedHex }` a `handleUpdateItemProperties`: nessun `borderColor` viene più toccato dal selettore.
+2. **Fix scroll Cabina ad alto zoom** (`TruckCanvas.tsx` → `clampPanY()`): nuova costante `CABINA_LABEL_OFFSET_CM = 32` (cm reali della fascia sopra la Cabina occupata dalla scritta `▲ CABINA ▲` e dalle quote). Nel **Caso B** il limite superiore diventa `maxPanY = PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM * zoom`, cioè l'altezza della scritta **scalata per lo zoom**: a 100%, 200% e 400%, scorrendo tutto in alto verso la Cabina, la didascalia e le quote restano interamente dentro il viewport (niente più scritta tagliata fuori) e non si crea spazio vuoto eccessivo. Il **Caso A** (mezzo interamente visibile) resta invariato e continua a centrare il pianale.
+3. **Doppio indicatore LDM Asimmetrico (Lato SX e DX)** (`TruckCanvas.tsx` + `utils/export.ts`): l'ingombro in metri lineari non è più un unico massimo globale ma viene calcolato **per lato** rispetto all'asse di mezzeria `midX = vehicle.width / 2`:
+   - `leftY = items.filter(i => i.x < midX).reduce((max, i) => Math.max(max, i.y + i.length), 0)`
+   - `rightY = items.filter(i => (i.x + i.width) > midX).reduce((max, i) => Math.max(max, i.y + i.length), 0)`
+   - **Carico simmetrico** (`Math.abs(leftY - rightY) < 1`, costante `LDM_SYMMETRY_TOLERANCE_CM`): singolo indicatore storico a sinistra, **linea guida continua** a $Y = \max(leftY, rightY)$ e badge scuro `#1E293B` (`▶ X.XX m`).
+   - **Carico asimmetrico**: due indicatori tratteggiati (`strokeDasharray="6 4"`), ciascuno solo sulla propria metà pianale — sinistro da $X = 0$ a `midX` con badge nel righello sinistro (`▶ X.XX m`), destro da `midX` a `vehicle.width` con badge **all'esterno della parete destra**, a `LDM_BADGE_RIGHT_GAP = 14 cm` oltre `vehicle.width` (`◀ X.XX m`).
+   - **Differenziazione cromatica:** il lato con l'ingombro **maggiore** usa lo sfondo scuro primario `#1E293B` (`LDM_BADGE_COLOR`), quello **minore** lo slate intermedio `#475569` (`LDM_BADGE_MUTED_COLOR`).
+   - In `export.ts` la stessa logica vive in `computeLdmSides()` + `getPianoExtent()`: con carico asimmetrico il gutter **destro** del viewBox viene allargato automaticamente di `LDM_BADGE_RESERVED_RIGHT` (82 cm) per ospitare il badge esterno (`getPianoExtent().width` = 450 cm contro 374 cm del caso simmetrico), così nello snapshot PNG nessun badge viene tagliato.
+4. **Matrice tonalità a 21 colori stile Excel** (`constants.ts` + `ControlDeck.tsx`): la vecchia lista piatta di 7 pastiglie è sostituita dalla matrice tipizzata **7 famiglie × 3 sfumature** (`ColorFamily`, `COLOR_FAMILIES`: Grigio, Azzurro, Verde, Giallo, Arancio, Corallo, Viola; tonalità `light` / `medium` / `dark`).
+   - Nel pannello **Selezionato** (singolo collo o gruppo batch) e in ogni riga del generatore **Stiva Sequenza** viene renderizzata la matrice compatta **7 colonne × 3 righe** (riga 1 chiara, riga 2 media, riga 3 scura) tramite l'helper `renderColorMatrix(activeColor, onPick, ariaPrefix)`.
+   - Ogni casella è un rettangolino `w-5 h-4.5` (20 × 18 px) `rounded-sm border border-slate-300 hover:scale-110 transition cursor-pointer`; la tinta attiva è evidenziata da `ring-2 ring-blue-600` (`aria-pressed`).
+   - Il click applica **solo** il riempimento (`color`) al collo o ai colli selezionati, conservando il bordo `#334155`; nelle righe di Stiva Sequenza la tinta scelta colora i colli del lotto alla successiva esecuzione.
+   - Le nuove righe di tappa ricevono automaticamente la tonalità *media* a rotazione (`COLOR_FAMILY_MEDIUM_SHADES`), così restano distinguibili a vista senza altre scelte.
+5. **Verifica headless (Chrome DevTools Protocol, zero dipendenze aggiunte):** **19/19 controlli superati in 5,1 s** (watchdog 15 s), `Browser.close` + `process.exit(0)`, nessun errore in console.
+   - Matrice: 21 caselle su 3 righe, celle 20 × 18 px, esattamente una tinta `aria-pressed` (la tonalità di catalogo del collo selezionato).
+   - LDM su canvas: 1 collo EUR piatto → due badge `▶ 0.80 m` (`#1E293B`) e `◀ 0.00 m` (`#475569`) con linee tratteggiate `0→125` e `125→250`; 2 colli → indicatore singolo `▶ 0.80 m` con linea **continua** `0→250` (nessun `stroke-dasharray`); 3 colli → `▶ 1.60 m` scuro a SX e `◀ 0.80 m` slate a DX.
+   - Bordi: click sulla tinta `Viola scuro` → il collo assume `fill #D8B4FE` mantenendo `stroke #334155` (e `#2563EB` mentre è selezionato); stesso esito per il collo generato da `Esegui Stiva Sequenziale` con tinta tappa `Corallo scuro` (fill `#FDA4AF`, stroke `#334155`).
+   - Export PNG: `buildPianoSvg` replica badge, tratteggi e colori differenziati; viewBox 450 cm (asimmetrico) vs 374 cm (simmetrico), un solo badge e linea continua nel caso simmetrico.
+   - Cabina: a 240% e 400%, dopo lo scroll completo verso l'alto, `pan.y` si arresta a `40 + 32 × zoom` (79,61 px a 240% e 106,02 px a 400%): `▲ CABINA ▲` (top 18 px / 3 px) e la quota larghezza restano **interamente** dentro un viewport di 805 px — con la vecchia formula (`maxPanY = 40`) la scritta sarebbe uscita di ~15 px a 240% e di ~53 px a 400%.
+
 ---
 
 ## 3. MAPPA ARCHITETTURALE DEI FILE
-- `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`, `LabelDensity`, `SequenceBatchItem`).
-- `src/constants.ts`: Presets veicoli, catalogo colli (bordo unico antracite `#334155`), `CUSTOM_PALLET` (fuori sagoma), costanti di rendering condivise (`ALERT_COLOR`, `NOMINAL_QUOTA_CM`, `LDM_BADGE`, colori di quota/contatore LDM).
+- `src/types.ts`: Tipi TypeScript (`VehicleConfig`, `PalletDefinition`, `PlacedItem`, `ItemPositionUpdate`, `AddItemOptions`, `LabelDensity`, `SequenceBatchItem` — senza `borderColor`: il contorno dei colli è l'invariante globale `ITEM_BORDER_COLOR`).
+- `src/constants.ts`: Presets veicoli, catalogo colli (bordo unico antracite `#334155`), `CUSTOM_PALLET` (fuori sagoma), **matrice colori stile Excel** (`ColorFamily`, `COLOR_FAMILIES` 7 famiglie × 3 sfumature, `COLOR_FAMILY_MEDIUM_SHADES`), costanti di rendering condivise (`ALERT_COLOR`, `NOMINAL_QUOTA_CM`, `LDM_BADGE`, `LDM_BADGE_MUTED_COLOR`, `LDM_SYMMETRY_TOLERANCE_CM`, helper `ldmBadgeRightLeftX` / `ldmBadgeRightCenterX`, `LDM_BADGE_RESERVED_RIGHT`).
 - `src/utils/snapping.ts`: Modulo matematico puro (`calculateSnapPosition`, `isRectColliding`, `isOutOfBounds`, `findSmartSpawnPosition`).
 - `src/utils/labels.ts`: Geometria condivisa delle etichette dei colli (`shouldWrapLabel`, `splitLabelIntoTwoLines`, `clipIdForItem`, corpi font in cm), usata sia dal canvas a schermo sia dall'export PNG.
-- `src/utils/export.ts`: Snapshot PNG pulito del pianale (`getPianoExtent`, `buildPianoSvg`, `rasterizeSnapshotToPng`, `copyCanvasToClipboard`) con copia negli appunti e fallback download.
-- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina con **clamp rigido intelligente** del pan Y (centratura automatica se il mezzo entra nello schermo, altrimenti blocco Cabina/Porte ai margini 40/50 px), didascalie `▲ CABINA ▲` e `PORTE POSTERIORI`, quota nominale 13,20 m e badge LDM dinamico, etichette con `clipPath` e a capo automatico, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
-- `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box ad accordion Sfuso e Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, palette, cancellazione di gruppo).
+- `src/utils/export.ts`: Snapshot PNG pulito del pianale (`computeLdmSides`, `getPianoExtent`, `buildPianoSvg`, `rasterizeSnapshotToPng`, `copyCanvasToClipboard`) con doppio badge LDM asimmetrico, gutter destro dedicato e copia negli appunti con fallback download.
+- `src/components/TruckCanvas.tsx`: Render SVG fullscreen, Zoom/Pan da rotellina con **clamp rigido intelligente** del pan Y (centratura automatica se il mezzo entra nello schermo, altrimenti blocco Cabina a `40 + 32 × zoom` per tenere dentro la didascalia e Porte a ridosso del bordo basso), didascalie `▲ CABINA ▲` e `PORTE POSTERIORI`, quota nominale 13,20 m e **doppio indicatore LDM per lato** (simmetrico continuo / asimmetrico tratteggiato SX + DX), etichette con `clipPath` e a capo automatico, selezione multipla (Cmd/Ctrl+Click, lasso Shift+Drag), drag di gruppo, eventi puntatore, segnalazione allarmi, HUD densità etichette (`LabelDensity`).
+- `src/components/ControlDeck.tsx`: Plancia di comando con barra comandi rapida (`Copia Immagine` / `Stampa / PDF`), selettore a schede (`📦 Carico Diretto` / `⚡ Stiva Sequenza`), righe dense colli, selettore adattivo, box ad accordion Sfuso e Formato Libero / Fuori Sagoma, generatore sequenziale a lotti/tappe, pannello selezione singola e batch (nome, **matrice colori 7 × 3**, cancellazione di gruppo) e matrice colori in ogni riga di tappa.
 - `src/components/PrintReport.tsx`: Scheda di carico A4 (`#print-report`) per stampa / salvataggio PDF.
 - `src/index.css`: Tailwind v4 + regole `@page` / `@media print` della scheda di carico.
-- `src/App.tsx`: Stato globale della stiva, della selezione multipla (`selectedItemIds`) e della densità etichette (`labelDensity`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, motore di stiva sequenziale (`handleExecuteSequence`), `handleUpdateItemsPos` / `handleUpdateItemProperties`.
+- `src/App.tsx`: Stato globale della stiva, della selezione multipla (`selectedItemIds`) e della densità etichette (`labelDensity`), scorciatoie tastiera (`Spazio`, `Canc`), rotazione su baricentro, motore di stiva sequenziale (`handleExecuteSequence`), `handleUpdateItemsPos` / `handleUpdateItemProperties`; ogni collo nasce con `borderColor: ITEM_BORDER_COLOR` (bordo antracite rigido).
 - `AGENTS.md`: File di contesto e direttive tassative per gli agent AI.
 
 ---

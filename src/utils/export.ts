@@ -6,10 +6,15 @@ import {
   LDM_BADGE_CENTER_X,
   LDM_BADGE_COLOR,
   LDM_BADGE_LEFT_X,
+  LDM_BADGE_MUTED_COLOR,
   LDM_BADGE_RESERVED_LEFT,
+  LDM_BADGE_RESERVED_RIGHT,
   LDM_GUIDE_COLOR,
+  LDM_SYMMETRY_TOLERANCE_CM,
   NOMINAL_QUOTA_CM,
   NOMINAL_QUOTA_COLOR,
+  ldmBadgeRightCenterX,
+  ldmBadgeRightLeftX,
 } from '../constants';
 import {
   AVERAGE_CHAR_WIDTH_RATIO,
@@ -78,6 +83,8 @@ const COLORS = {
   nominalQuota: NOMINAL_QUOTA_COLOR,
   ldmGuide: LDM_GUIDE_COLOR,
   ldmBadge: LDM_BADGE_COLOR,
+  /** Badge del lato MENO carico, col carico asimmetrico. */
+  ldmBadgeMuted: LDM_BADGE_MUTED_COLOR,
   ldmBadgeText: '#FFFFFF',
 } as const;
 
@@ -121,6 +128,44 @@ export interface PianoSnapshot {
 }
 
 /**
+ * Ingombro LDM (metri lineari occupati) dei due lati della mezzeria del pianale.
+ * Stessa geometria del canvas a schermo (`TruckCanvas.tsx`): un collo a cavallo
+ * della mezzeria contribuisce a entrambi i lati.
+ */
+interface LdmSides {
+  /** Asse di mezzeria del pianale (cm). */
+  midX: number;
+  /** Ingombro (cm) del lato sinistro. */
+  leftY: number;
+  /** Ingombro (cm) del lato destro. */
+  rightY: number;
+  /** `true` se i due lati differiscono meno della tolleranza di 1 cm. */
+  isSymmetric: boolean;
+  /** Lato con l'ingombro maggiore: guida il colore del badge (scuro/muted). */
+  heavierSide: 'left' | 'right';
+}
+
+/** Calcola gli ingombri LDM dei due lati della mezzeria del pianale. */
+const computeLdmSides = (vehicle: VehicleConfig, items: PlacedItem[]): LdmSides => {
+  const midX = vehicle.width / 2;
+
+  const leftY = items
+    .filter((item) => item.x < midX)
+    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  const rightY = items
+    .filter((item) => item.x + item.width > midX)
+    .reduce((max, item) => Math.max(max, item.y + item.length), 0);
+
+  return {
+    midX,
+    leftY,
+    rightY,
+    isSymmetric: Math.abs(leftY - rightY) < LDM_SYMMETRY_TOLERANCE_CM,
+    heavierSide: leftY >= rightY ? 'left' : 'right',
+  };
+};
+
+/**
  * Calcola l'ingombro del pianale da esportare.
  *
  * L'altezza include anche gli eventuali colli che sforano dalle porte
@@ -147,10 +192,19 @@ export const getPianoExtent = (vehicle: VehicleConfig, items: PlacedItem[]): Pia
     showsNominalQuota ? NOMINAL_QUOTA_RESERVED_LEFT : 0
   );
 
+  // Badge LDM del lato destro: vive FUORI dalla parete destra, quindi con un
+  // carico asimmetrico il viewBox deve riservare spazio anche a destra.
+  const ldm = computeLdmSides(vehicle, items);
+  const needsRightLdmBadge = hasLdmBadge && !ldm.isSymmetric;
+  const rightPadding = Math.max(
+    PADDING.right,
+    needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0
+  );
+
   return {
     minX: -leftPadding,
     minY: -PADDING.top,
-    width: vehicle.width + leftPadding + PADDING.right,
+    width: vehicle.width + leftPadding + rightPadding,
     height: PADDING.top + maxY + PADDING.bottom,
     contentBottom: maxY,
     doorLine: vehicle.length,
@@ -349,22 +403,70 @@ export const buildPianoSvg = (
     );
   }
 
-  // Contatore dinamico LDM: linea guida alla Y massima occupata + badge scuro.
-  const maxOccupiedY = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+  // Contatore dinamico LDM (metri lineari occupati), calcolato per lato:
+  // carico simmetrico → singolo indicatore a sinistra con linea guida continua;
+  // carico asimmetrico → due indicatori tratteggiati (metà SX e metà DX), con il
+  // lato più carico in scuro primario e quello meno carico in slate intermedio.
+  const ldm = computeLdmSides(vehicle, items);
+  const maxOccupiedY = Math.max(ldm.leftY, ldm.rightY);
+
   if (maxOccupiedY > 0) {
-    parts.push(
-      `<line x1="0" y1="${round(maxOccupiedY)}" x2="${vehicle.width}" y2="${round(
-        maxOccupiedY
-      )}" stroke="${COLORS.ldmGuide}" stroke-width="1" stroke-dasharray="6 4"/>`,
-      `<rect x="${LDM_BADGE_LEFT_X}" y="${round(
-        maxOccupiedY - LDM_BADGE.height / 2
-      )}" width="${LDM_BADGE.width}" height="${LDM_BADGE.height}" rx="3" fill="${COLORS.ldmBadge}"/>`,
-      `<text x="${LDM_BADGE_CENTER_X}" y="${round(
-        maxOccupiedY + 3.5
-      )}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.meter}" font-weight="bold" fill="${COLORS.ldmBadgeText}">▶ ${(
-        maxOccupiedY / 100
-      ).toFixed(2)} m</text>`
-    );
+    const leftBadgeColor = ldm.heavierSide === 'left' ? COLORS.ldmBadge : COLORS.ldmBadgeMuted;
+    const rightBadgeColor = ldm.heavierSide === 'left' ? COLORS.ldmBadgeMuted : COLORS.ldmBadge;
+
+    /** Badge rettangolare + dicitura, alla Y indicata. */
+    const badge = (x: number, centerX: number, y: number, label: string, fill: string): string =>
+      `<rect x="${round(x)}" y="${round(y - LDM_BADGE.height / 2)}" width="${
+        LDM_BADGE.width
+      }" height="${LDM_BADGE.height}" rx="3" fill="${fill}"/><text x="${round(
+        centerX
+      )}" y="${round(y + 3.5)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${
+        FONT.meter
+      }" font-weight="bold" fill="${COLORS.ldmBadgeText}">${label}</text>`;
+
+    if (ldm.isSymmetric) {
+      // Linea guida continua a tutta larghezza + badge scuro nel righello sinistro.
+      parts.push(
+        `<line x1="0" y1="${round(maxOccupiedY)}" x2="${vehicle.width}" y2="${round(
+          maxOccupiedY
+        )}" stroke="${COLORS.ldmGuide}" stroke-width="1"/>`,
+        badge(
+          LDM_BADGE_LEFT_X,
+          LDM_BADGE_CENTER_X,
+          maxOccupiedY,
+          `▶ ${(maxOccupiedY / 100).toFixed(2)} m`,
+          COLORS.ldmBadge
+        )
+      );
+    } else {
+      // Lato sinistro: linea tratteggiata 0 → mezzeria, badge nel righello sinistro.
+      parts.push(
+        `<line x1="0" y1="${round(ldm.leftY)}" x2="${round(ldm.midX)}" y2="${round(
+          ldm.leftY
+        )}" stroke="${COLORS.ldmGuide}" stroke-width="1" stroke-dasharray="6 4"/>`,
+        badge(
+          LDM_BADGE_LEFT_X,
+          LDM_BADGE_CENTER_X,
+          ldm.leftY,
+          `▶ ${(ldm.leftY / 100).toFixed(2)} m`,
+          leftBadgeColor
+        )
+      );
+
+      // Lato destro: linea tratteggiata mezzeria → parete, badge OLTRE la parete.
+      parts.push(
+        `<line x1="${round(ldm.midX)}" y1="${round(ldm.rightY)}" x2="${
+          vehicle.width
+        }" y2="${round(ldm.rightY)}" stroke="${COLORS.ldmGuide}" stroke-width="1" stroke-dasharray="6 4"/>`,
+        badge(
+          ldmBadgeRightLeftX(vehicle.width),
+          ldmBadgeRightCenterX(vehicle.width),
+          ldm.rightY,
+          `◀ ${(ldm.rightY / 100).toFixed(2)} m`,
+          rightBadgeColor
+        )
+      );
+    }
   }
 
   // Colli stivati: colore, bordo e testo formattato secondo la densità.

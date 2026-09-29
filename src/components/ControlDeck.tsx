@@ -7,7 +7,8 @@ import type {
   SequenceBatchItem,
   LabelDensity,
 } from '../types';
-import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET } from '../constants';
+import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES, COLOR_FAMILY_MEDIUM_SHADES } from '../constants';
+import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
 import {
   Truck,
@@ -63,18 +64,14 @@ const CUSTOM_MIN_LENGTH = 10;
 const CUSTOM_MAX_LENGTH = 1500;
 
 /**
- * Palette colori rapida per il collo selezionato: 7 pastiglie pastello
- * coordinate (fill tenue + bordo pieno alto contrasto), coerenti col catalogo.
+ * Matrice colori stile Excel (Sprint F): 7 famiglie × 3 sfumature = 21 tinte.
+ * Le tre righe si susseguono dalla tonalità chiara alla scura.
  */
-const COLOR_PALETTE = [
-  { label: 'Grigio', fill: '#E2E8F0', border: '#475569' },
-  { label: 'Giallo', fill: '#FEF08A', border: '#CA8A04' },
-  { label: 'Arancio', fill: '#FED7AA', border: '#EA580C' },
-  { label: 'Verde', fill: '#DCFCE7', border: '#16A34A' },
-  { label: 'Azzurro', fill: '#BAE6FD', border: '#0284C7' },
-  { label: 'Lilla', fill: '#F3E8FF', border: '#9333EA' },
-  { label: 'Rosa/Corallo', fill: '#FFE4E6', border: '#E11D48' },
-] as const;
+const COLOR_SHADE_ROWS: { key: keyof ColorFamily['shades']; label: string }[] = [
+  { key: 'light', label: 'chiaro' },
+  { key: 'medium', label: 'medio' },
+  { key: 'dark', label: 'scuro' },
+];
 
 interface ControlDeckProps {
   vehicle: VehicleConfig;
@@ -174,36 +171,47 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
       : null;
 
   /**
-   * Riga di 7 pastiglie colore: applica la tinta a TUTTI gli ID indicati
-   * (singolo collo oppure gruppo, in un'unica patch di stato).
+   * Matrice colori compatta 7 colonne (famiglie) × 3 righe (sfumature):
+   * riga 1 chiara, riga 2 media, riga 3 scura. Le caselle sono rettangolini
+   * `w-5 h-4.5` con bordo sottile; la tinta attiva è evidenziata da un anellino
+   * blu (`ring-2 ring-blue-600`).
+   *
+   * Cliccando una casella viene aggiornato **solo** il riempimento dei colli
+   * indicati: il contorno resta rigidamente `ITEM_BORDER_COLOR` (`#334155`).
+   *
    * @param activeColor tinta comune alla selezione (null se i colli divergono).
+   * @param onPick      riceve l'HEX della sfumatura cliccata.
+   * @param ariaPrefix  prefisso delle etichette accessibili (singolo / tappa).
    */
-  const renderColorPalette = (ids: string[], activeColor: string | null) => (
-    <div className="flex items-center gap-1.5">
-      {COLOR_PALETTE.map((swatch) => {
-        // Confronto case-insensitive: i colori di catalogo sono in HEX maiuscolo.
-        const isActive = activeColor?.toLowerCase() === swatch.fill.toLowerCase();
-        return (
-          <button
-            key={swatch.label}
-            type="button"
-            title={swatch.label}
-            aria-label={`Colore ${swatch.label}`}
-            onClick={() =>
-              onUpdateItemProperties(ids, {
-                color: swatch.fill,
-                borderColor: swatch.border,
-              })
-            }
-            className={`h-5 w-5 rounded-full border transition ${
-              isActive
-                ? 'ring-2 ring-blue-500 ring-offset-1'
-                : 'hover:scale-110 hover:ring-1 hover:ring-slate-400'
-            }`}
-            style={{ backgroundColor: swatch.fill, borderColor: swatch.border }}
-          />
-        );
-      })}
+  const renderColorMatrix = (
+    activeColor: string | null,
+    onPick: (hex: string) => void,
+    ariaPrefix: string
+  ) => (
+    <div role="group" aria-label="Matrice colori" className="inline-flex flex-col gap-0.5">
+      {COLOR_SHADE_ROWS.map((shade) => (
+        <div key={shade.key} className="flex items-center gap-1">
+          {COLOR_FAMILIES.map((family) => {
+            const hex = family.shades[shade.key];
+            // Confronto case-insensitive: i colori possono arrivare in HEX maiuscolo.
+            const isActive = activeColor?.toLowerCase() === hex.toLowerCase();
+            return (
+              <button
+                key={`${family.id}-${shade.key}`}
+                type="button"
+                title={`${family.name} ${shade.label}`}
+                aria-label={`${ariaPrefix} ${family.name} ${shade.label}`}
+                aria-pressed={isActive}
+                onClick={() => onPick(hex)}
+                className={`w-5 h-4.5 rounded-sm border border-slate-300 hover:scale-110 transition cursor-pointer ${
+                  isActive ? 'ring-2 ring-blue-600' : ''
+                }`}
+                style={{ backgroundColor: hex }}
+              />
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 
@@ -226,21 +234,18 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   // --- Generatore "Stiva Sequenza" (Multi-Tappa) ---------------------------
 
   /**
-   * Nuova riga lotto/tappa. Il colore pastello ruota automaticamente in base
-   * alla posizione della riga, così tappe diverse restano distinguibili a vista.
+   * Nuova riga lotto/tappa. La tonalità "media" della matrice ruota
+   * automaticamente in base alla posizione della riga: tappe diverse restano
+   * distinguibili a vista senza che l'operatore debba scegliere il colore.
    */
-  const createSequenceRow = (index: number): SequenceBatchItem => {
-    const swatch = COLOR_PALETTE[index % COLOR_PALETTE.length];
-    return {
-      id: `seq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      quantity: 1,
-      palletCode: DEFAULT_SEQUENCE_FORMAT,
-      orientation: 'piatto',
-      clientName: '',
-      color: swatch.fill,
-      borderColor: swatch.border,
-    };
-  };
+  const createSequenceRow = (index: number): SequenceBatchItem => ({
+    id: `seq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    quantity: 1,
+    palletCode: DEFAULT_SEQUENCE_FORMAT,
+    orientation: 'piatto',
+    clientName: '',
+    color: COLOR_FAMILY_MEDIUM_SHADES[index % COLOR_FAMILY_MEDIUM_SHADES.length],
+  });
 
   const handleAddSequenceRow = () => {
     setSequenceRows((prev) => [...prev, createSequenceRow(prev.length)]);
@@ -254,20 +259,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
 
   const handleRemoveSequenceRow = (id: string) => {
     setSequenceRows((prev) => prev.filter((row) => row.id !== id));
-  };
-
-  /** Cicla la pastiglia colore della riga tra i 7 colori pastello della palette. */
-  const handleCycleSequenceColor = (id: string) => {
-    setSequenceRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== id) return row;
-        const currentIndex = COLOR_PALETTE.findIndex(
-          (swatch) => swatch.fill.toLowerCase() === row.color.toLowerCase()
-        );
-        const next = COLOR_PALETTE[(currentIndex + 1) % COLOR_PALETTE.length];
-        return { ...row, color: next.fill, borderColor: next.border };
-      })
-    );
   };
 
   /** Passa i lotti al motore di stiva sequenziale in `App.tsx`. */
@@ -690,10 +681,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           <div className="space-y-1.5">
             {sequenceRows.map((row, index) => {
               const isPiatto = row.orientation === 'piatto';
-              const swatchLabel =
-                COLOR_PALETTE.find(
-                  (swatch) => swatch.fill.toLowerCase() === row.color.toLowerCase()
-                )?.label ?? 'Colore';
 
               return (
                 <div
@@ -758,17 +745,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                     </button>
                   </div>
 
-                  {/* Riga 2: colore, cliente, rimozione */}
+                  {/* Riga 2: cliente e rimozione */}
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleCycleSequenceColor(row.id)}
-                      title={`Colore tappa: ${swatchLabel} (click per cambiare)`}
-                      aria-label={`Colore tappa ${swatchLabel}`}
-                      className="h-5 w-5 shrink-0 rounded-full border transition hover:scale-110 hover:ring-1 hover:ring-slate-400"
-                      style={{ backgroundColor: row.color, borderColor: row.borderColor }}
-                    />
-
                     <input
                       type="text"
                       value={row.clientName}
@@ -788,6 +766,18 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
+                  </div>
+
+                  {/* Riga 3: matrice colori della tappa (7 famiglie × 3 sfumature) */}
+                  <div className="flex items-start gap-1.5">
+                    <span className="shrink-0 text-[10px] font-bold text-slate-500 uppercase leading-4">
+                      Colore
+                    </span>
+                    {renderColorMatrix(
+                      row.color,
+                      (hex) => handleUpdateSequenceRow(row.id, { color: hex }),
+                      'Colore tappa'
+                    )}
                   </div>
                 </div>
               );
@@ -885,12 +875,17 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             />
           </label>
 
-          {/* Palette colori rapida (7 pastiglie): singola o batch sul gruppo */}
+          {/* Matrice colori (7 famiglie × 3 sfumature): singola o batch sul gruppo.
+              Aggiorna SOLO il riempimento: il bordo resta `#334155`. */}
           <div className="space-y-1">
             <span className="block text-[10px] font-bold text-blue-900/70 uppercase tracking-wider">
               Colore
             </span>
-            {renderColorPalette(selectedIds, selectedItem ? selectedItem.color : sharedColor)}
+            {renderColorMatrix(
+              selectedItem ? selectedItem.color : sharedColor,
+              (hex) => onUpdateItemProperties(selectedIds, { color: hex }),
+              'Colore'
+            )}
           </div>
 
           <div className="flex gap-2">

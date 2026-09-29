@@ -8,7 +8,7 @@ import type {
   LabelDensity,
   SequenceBatchItem,
 } from './types';
-import { VEHICLE_PRESETS, PALLET_CATALOG } from './constants';
+import { VEHICLE_PRESETS, PALLET_CATALOG, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { PrintReport } from './components/PrintReport';
@@ -57,7 +57,10 @@ export default function App() {
       y: spawn.y,
       rotation: options.rotation ?? 0,
       color: pallet.color,
-      borderColor: pallet.borderColor,
+      // Bordo RIGIDO: qualunque sia la tinta assegnata al collo, il contorno
+      // resta sempre l'antracite uniforme `ITEM_BORDER_COLOR`. Il rosso è
+      // riservato alle sole condizioni di allarme, il blu alla selezione.
+      borderColor: ITEM_BORDER_COLOR,
     };
 
     setItems((prev) => [...prev, newItem]);
@@ -117,7 +120,9 @@ export default function App() {
               y: spawn.y,
               rotation: isPiatto ? 90 : 0,
               color: batch.color || pallet.color,
-              borderColor: batch.borderColor || pallet.borderColor,
+              // Bordo rigido anche in stiva sequenziale: la tinta di tappa
+              // colora solo il riempimento, mai il contorno.
+              borderColor: ITEM_BORDER_COLOR,
             };
 
             current = [...current, newItem];
