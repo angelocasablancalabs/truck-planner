@@ -33,14 +33,11 @@ import {
 } from './sideNotes';
 import {
   CABINA_CAPTION_BASELINE_CM,
-  PLATE_BADGE_BORDER_COLOR,
-  PLATE_BADGE_BORDER_DASH,
-  PLATE_BADGE_BORDER_WIDTH,
-  PLATE_BADGE_CORNER_RADIUS_CM,
-  PLATE_BADGE_FILL,
+  PLATE_BADGE_EXTENT_MARGIN_CM,
   PLATE_BADGE_FONT_FAMILY,
-  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_LETTER_SPACING_EM,
   PLATE_BADGE_TEXT_COLOR,
+  PLATE_BADGE_TOP_CM,
   WIDTH_QUOTA_BASELINE_CM,
   plateBadgeLayout,
 } from './plateBadge';
@@ -92,12 +89,15 @@ const SCENE_MARGIN_CM = 40;
 const SCENE_PADDING_CM = 20;
 
 /**
- * Bordo superiore dell'inquadratura (cm): spazio per la card targa
- * (`-48 … -28 cm`), per la scritta `▲ CABINA ▲` e per la quota larghezza.
- * Con `-65 cm` l'immagine lascia 17 cm d'aria sopra il badge: nulla viene mai
- * tagliato, a nessuna larghezza di targa.
+ * Bordo superiore dell'inquadratura (cm): spazio per il testo della targa
+ * (corpo base 30 px, punto più alto `PLATE_BADGE_TOP_CM`), per la scritta
+ * `▲ CABINA ▲` e per la quota larghezza. È **derivato** dal modulo condiviso
+ * `utils/plateBadge.ts` con un margine di sicurezza, quindi il glifo ingrandito
+ * non può mai essere tagliato in alto. La quota resta fissa anche a targa vuota,
+ * così la cornice non cambia tra due esportazioni consecutive dello stesso
+ * carico (sezione AA).
  */
-const SCENE_TOP_CM = -65;
+const SCENE_TOP_CM = Math.floor(PLATE_BADGE_TOP_CM) - 1;
 
 /** Corpi testo (cm reali), allineati al rendering del canvas a schermo. */
 const FONT = {
@@ -181,16 +181,25 @@ export interface PianoSnapshot {
  * camion (`x < 0`) allarga quindi l'immagine verso sinistra, una nota in coda la
  * allunga verso il basso.
  *
+ * **Targa estesa fuori sponda:** il testo della targa può sforare di 50 cm per
+ * lato oltre le pareti del mezzo (fascia fino a `vehicle.width + 100` cm), quindi
+ * il `viewBox` include anche l'ingombro orizzontale reale della scritta:
+ * `textWidthCm = caratteri × fontSize × 0.65`, `plateLeftX = vehicle.width / 2 −
+ * textWidthCm / 2 − 15`, `plateRightX = vehicle.width / 2 + textWidthCm / 2 + 15`.
+ * Né nel PNG a 2400 px né nella scheda A4 la targa può così risultare tagliata.
+ *
  * @param vehicle      Configurazione del mezzo (dimensioni utili in cm)
  * @param items        Colli stivati sul pianale
  * @param labelDensity Densità etichette applicata all'immagine (`all` di default)
  * @param notes        Note laterali da includere nello snapshot
+ * @param plate        Targa / identificativo del mezzo (stringa vuota = nessuna)
  */
 export const getPianoExtent = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
   labelDensity: LabelDensity = 'all',
-  notes: SideNote[] = []
+  notes: SideNote[] = [],
+  plate: string = ''
 ): PianoExtent => {
   // Geometria reale delle card: altezza fissata dall'operatore o auto-adattata.
   const noteLayouts = notes.length > 0 ? resolveNoteLayouts(notes) : [];
@@ -203,12 +212,32 @@ export const getPianoExtent = (
       ...noteLayouts.map((layout) => layout.note.y + layout.height)
     ) + BOTTOM_MARGIN_CM;
 
-  // Ingombro orizzontale reale della scena: il pianale e tutte le note, dove sono.
+  /**
+   * Ingombro orizzontale REALE del testo della targa (cm), centrato a
+   * `vehicle.width / 2`: `textWidthCm = caratteri × fontSize × 0.65` — la
+   * misurazione arriva dal modulo condiviso `utils/plateBadge.ts`
+   * (`PLATE_BADGE_CHAR_ADVANCE_EM`), unica fonte di verità delle tre rese.
+   * A targa vuota il testo non esiste: i due estremi restano il margine standard
+   * della scena e non aggiungono nulla all'inquadratura.
+   */
+  const plateBadge = plateBadgeLayout(vehicle.width, plate);
+  const textWidthCm = plateBadge ? plateBadge.textWidthCm : 0;
+  const plateLeftX = plateBadge
+    ? vehicle.width / 2 - textWidthCm / 2 - PLATE_BADGE_EXTENT_MARGIN_CM
+    : -SCENE_MARGIN_CM;
+  const plateRightX = plateBadge
+    ? vehicle.width / 2 + textWidthCm / 2 + PLATE_BADGE_EXTENT_MARGIN_CM
+    : vehicle.width + SCENE_MARGIN_CM;
+
+  // Ingombro orizzontale reale della scena: il pianale, la targa estesa e tutte
+  // le note, dove sono.
   const sceneMinX =
-    Math.min(-SCENE_MARGIN_CM, ...notes.map((note) => note.x)) - SCENE_PADDING_CM;
+    Math.min(-SCENE_MARGIN_CM, plateLeftX, ...notes.map((note) => note.x)) -
+    SCENE_PADDING_CM;
   const sceneMaxX =
     Math.max(
       vehicle.width + SCENE_MARGIN_CM,
+      plateRightX,
       ...notes.map((note) => note.x + note.width)
     ) + SCENE_PADDING_CM;
 
@@ -237,10 +266,12 @@ export const getPianoExtent = (
     needsRightLdmBadge ? LDM_BADGE_RESERVED_RIGHT : 0
   );
 
-  // Inquadratura finale: unione tra l'ingombro reale della scena (note comprese)
-  // e gli spazi riservati ai righelli. Nessun elemento può restare fuori.
-  const minX = Math.min(-leftPadding, sceneMinX);
-  const maxX = Math.max(vehicle.width + rightPadding, sceneMaxX);
+  // Inquadratura finale: unione tra l'ingombro reale della scena (note comprese),
+  // l'ingombro del testo della targa estesa fuori sponda (`plateLeftX` /
+  // `plateRightX`) e gli spazi riservati ai righelli. Nessun elemento può
+  // restare fuori: la targa non viene mai tagliata.
+  const minX = Math.min(-leftPadding, sceneMinX, plateLeftX);
+  const maxX = Math.max(vehicle.width + rightPadding, sceneMaxX, plateRightX);
   const minY = SCENE_TOP_CM;
 
   return {
@@ -445,33 +476,33 @@ const renderNotes = (notes: SideNote[]): string => {
 /**
  * Badge Targa / Identificativo Mezzo nello snapshot SVG.
  *
- * Stessa card vettoriale del canvas a schermo (geometria dal modulo condiviso
- * `utils/plateBadge.ts`): rettangolo `rx=3` con sfondo `#F8FAFC` e bordo
- * antracite, centrato sull'asse del pianale nella fascia `-48 … -28 cm`.
- * Con targa vuota il bordo diventa tratteggiato e compare il segnaposto
- * `[ TARGA / IDENTIFICATIVO ]` in grigio; con targa digitata il testo è in
- * maiuscolo monospaziato in grassetto.
+ * **Solo testo**, con la stessa geometria e lo stesso corpo del canvas a schermo
+ * (modulo condiviso `utils/plateBadge.ts`): scritta monospaziata tecnica in
+ * `#0F172A`, centrata sull'asse del pianale nella fascia di intestazione sopra
+ * `▲ CABINA ▲`, corpo base **30 px** ridotto proporzionalmente solo per le targhe
+ * molto lunghe. La scritta può sforare di 50 cm per lato oltre le sponde: è il
+ * `viewBox` di `getPianoExtent` ad allargarsi di conseguenza.
+ *
+ * **Silente a riposo:** con la targa vuota la funzione restituisce stringa vuota
+ * — nessun rettangolo, nessun tratteggio e nessun segnaposto finiscono nello
+ * snapshot, che resta pulito sopra la Cabina.
  *
  * @param vehicle Configurazione del mezzo (per larghezza e centratura)
  * @param plate   Targa / identificativo digitato dall'operatore
  */
 const renderPlateBadge = (vehicle: VehicleConfig, plate: string): string => {
   const badge = plateBadgeLayout(vehicle.width, plate);
-  const dash = badge.hasPlate ? '' : ` stroke-dasharray="${PLATE_BADGE_BORDER_DASH}"`;
-  const textColor = badge.hasPlate ? PLATE_BADGE_TEXT_COLOR : PLATE_BADGE_PLACEHOLDER_COLOR;
+  if (!badge) return '';
 
   return [
     `<g id="export-plate-badge">`,
-    `<rect x="${round(badge.x)}" y="${round(badge.top)}" width="${round(
-      badge.width
-    )}" height="${round(badge.height)}" rx="${PLATE_BADGE_CORNER_RADIUS_CM}" fill="${
-      PLATE_BADGE_FILL
-    }" stroke="${PLATE_BADGE_BORDER_COLOR}" stroke-width="${PLATE_BADGE_BORDER_WIDTH}"${dash}/>`,
     `<text x="${round(badge.centerX)}" y="${round(
       badge.centerY
     )}" text-anchor="middle" dominant-baseline="middle" font-family="${
       PLATE_BADGE_FONT_FAMILY
-    }" font-size="${round(badge.fontSize)}" font-weight="bold" fill="${textColor}">${escapeXml(
+    }" font-size="${round(badge.fontSize)}" font-weight="900" letter-spacing="${
+      PLATE_BADGE_LETTER_SPACING_EM
+    }em" stroke="none" stroke-width="0" fill="${PLATE_BADGE_TEXT_COLOR}">${escapeXml(
       badge.label
     )}</text>`,
     `</g>`,
@@ -494,7 +525,7 @@ const renderPlateBadge = (vehicle: VehicleConfig, plate: string): string => {
  * @param items        Colli stivati
  * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
  * @param notes        Note laterali di carico da includere nell'immagine
- * @param plate        Targa / identificativo del mezzo (default: segnaposto)
+ * @param plate        Targa / identificativo del mezzo (vuota = nessun badge)
  */
 export const buildPianoSvg = (
   vehicle: VehicleConfig,
@@ -503,7 +534,9 @@ export const buildPianoSvg = (
   notes: SideNote[] = [],
   plate: string = ''
 ): PianoSnapshot => {
-  const extent = getPianoExtent(vehicle, items, labelDensity, notes);
+  // L'inquadratura riceve la targa: il `viewBox` include l'ingombro reale del
+  // testo esteso fuori sponda, quindi la scritta non viene mai tagliata.
+  const extent = getPianoExtent(vehicle, items, labelDensity, notes, plate);
   const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
   const height = Math.max(1, Math.round(extent.height * pxPerCm));
 
@@ -653,13 +686,16 @@ export const buildPianoSvg = (
     `<line x1="0" y1="${vehicle.length}" x2="${vehicle.width}" y2="${vehicle.length}" stroke="${COLORS.wall}" stroke-width="3" stroke-dasharray="16 8"/>`
   );
 
-  // Badge targa / identificativo mezzo: card tecnica sopra la Cabina, con la
-  // stessa geometria del canvas a schermo (fascia `-48 … -28 cm`).
+  // Badge targa / identificativo mezzo: **solo testo** sopra la Cabina, con la
+  // stessa geometria del canvas a schermo (corpo base 30 px). La scritta può
+  // sforare di 50 cm per lato oltre le sponde: il `viewBox` calcolato da
+  // `getPianoExtent` la contiene già. Con targa vuota non viene emesso nulla: lo
+  // snapshot resta pulito e trasparente.
   parts.push(renderPlateBadge(vehicle, plate));
 
-  // Intestazioni e quote. La didascalia `▲ CABINA ▲` vive SOTTO la card targa,
-  // quindi ha una quota fissa condivisa (non più relativa al bordo superiore
-  // dell'inquadratura, che ora è occupato dal badge).
+  // Intestazioni e quote. La didascalia `▲ CABINA ▲` vive SOTTO la fascia della
+  // targa, quindi ha una quota fissa condivisa (non più relativa al bordo
+  // superiore dell'inquadratura, che resta riservato all'identificativo).
   parts.push(
     `<text x="${vehicle.width / 2}" y="${CABINA_CAPTION_BASELINE_CM}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ CABINA ▲</text>`,
     `<text x="${vehicle.width / 2}" y="${WIDTH_QUOTA_BASELINE_CM}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.quota}" fill="${COLORS.gridText}">${vehicle.width} cm</text>`,

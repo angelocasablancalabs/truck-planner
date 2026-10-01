@@ -7,13 +7,8 @@ import { getPianoExtent, noteClipId } from '../utils/export';
 import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
 import {
   CABINA_CAPTION_BASELINE_CM,
-  PLATE_BADGE_BORDER_COLOR,
-  PLATE_BADGE_BORDER_DASH,
-  PLATE_BADGE_BORDER_WIDTH,
-  PLATE_BADGE_CORNER_RADIUS_CM,
-  PLATE_BADGE_FILL,
   PLATE_BADGE_FONT_FAMILY,
-  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_LETTER_SPACING_EM,
   PLATE_BADGE_TEXT_COLOR,
   WIDTH_QUOTA_BASELINE_CM,
   plateBadgeLayout,
@@ -171,12 +166,21 @@ export const PrintReport: React.FC<PrintReportProps> = ({
     return () => window.removeEventListener('beforeprint', refreshTimestamp);
   }, []);
 
-  const extent = getPianoExtent(vehicle, items, labelDensity, notes);
   /**
-   * Badge targa / identificativo mezzo: geometria dal modulo condiviso
-   * `utils/plateBadge.ts`, identica al canvas a schermo e allo snapshot PNG. Il
-   * bordo superiore dell'inquadratura (`minY = -65 cm`) arriva dalla stessa
-   * `getPianoExtent`, quindi la card non viene mai tagliata.
+   * Inquadratura della scheda: `getPianoExtent` riceve anche la **targa**, perché
+   * il testo può sforare di 50 cm per lato oltre le sponde (`vehicle.width + 100`
+   * cm). Il `viewBox` include l'ingombro reale della scritta
+   * (`plateLeftX = vehicle.width / 2 − textWidthCm / 2 − 15` e
+   * `plateRightX = vehicle.width / 2 + textWidthCm / 2 + 15`, con
+   * `textWidthCm = caratteri × fontSize × 0.65`): nemmeno in stampa PDF la targa
+   * estesa può essere tagliata ai bordi.
+   */
+  const extent = getPianoExtent(vehicle, items, labelDensity, notes, plate);
+  /**
+   * Badge targa / identificativo mezzo (**solo testo**): geometria dal modulo
+   * condiviso `utils/plateBadge.ts`, identica al canvas a schermo e allo snapshot
+   * PNG. Con targa vuota la funzione restituisce `null` e sulla scheda non viene
+   * disegnato alcunché sopra la Cabina.
    */
   const plateBadge = plateBadgeLayout(vehicle.width, plate);
   const rows = buildSummaryRows(items);
@@ -545,38 +549,33 @@ export const PrintReport: React.FC<PrintReportProps> = ({
             }
           )}
 
-          {/* Badge targa / identificativo mezzo: card tecnica sopra la Cabina,
-              con la stessa geometria del canvas a schermo (fascia -48 … -28 cm).
-              Con targa vuota: segnaposto discreto e bordo tratteggiato. */}
-          <g id="print-plate-badge">
-            <rect
-              x={round(plateBadge.x)}
-              y={round(plateBadge.top)}
-              width={round(plateBadge.width)}
-              height={round(plateBadge.height)}
-              rx={PLATE_BADGE_CORNER_RADIUS_CM}
-              fill={PLATE_BADGE_FILL}
-              stroke={PLATE_BADGE_BORDER_COLOR}
-              strokeWidth={PLATE_BADGE_BORDER_WIDTH}
-              strokeDasharray={plateBadge.hasPlate ? undefined : PLATE_BADGE_BORDER_DASH}
-            />
-            <text
-              x={round(plateBadge.centerX)}
-              y={round(plateBadge.centerY)}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontFamily={PLATE_BADGE_FONT_FAMILY}
-              fontSize={round(plateBadge.fontSize)}
-              fontWeight="bold"
-              fill={
-                plateBadge.hasPlate ? PLATE_BADGE_TEXT_COLOR : PLATE_BADGE_PLACEHOLDER_COLOR
-              }
-            >
-              {plateBadge.label}
-            </text>
-          </g>
+          {/* Badge targa / identificativo mezzo: **solo testo** sopra la Cabina,
+              con la stessa geometria e lo stesso corpo del canvas a schermo
+              (corpo base 30 px, fascia di intestazione sopra `▲ CABINA ▲`).
+              Zero bordo e zero tratteggio: con targa vuota il blocco non esiste
+              e la fascia resta pulita. La scritta può sforare di 50 cm per lato
+              oltre le sponde: è il `viewBox` qui sopra a contenerla. */}
+          {plateBadge && (
+            <g id="print-plate-badge">
+              <text
+                x={round(plateBadge.centerX)}
+                y={round(plateBadge.centerY)}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontFamily={PLATE_BADGE_FONT_FAMILY}
+                fontSize={round(plateBadge.fontSize)}
+                fontWeight="900"
+                letterSpacing={`${PLATE_BADGE_LETTER_SPACING_EM}em`}
+                stroke="none"
+                strokeWidth={0}
+                fill={PLATE_BADGE_TEXT_COLOR}
+              >
+                {plateBadge.label}
+              </text>
+            </g>
+          )}
 
-          {/* Intestazioni (la didascalia CABINA vive SOTTO la card targa) */}
+          {/* Intestazioni (la didascalia CABINA vive SOTTO la fascia targa) */}
           <text
             x={vehicle.width / 2}
             y={CABINA_CAPTION_BASELINE_CM}

@@ -51,14 +51,11 @@ import {
 } from '../utils/sideNotes';
 import {
   CABINA_CAPTION_BASELINE_CM,
-  PLATE_BADGE_BORDER_COLOR,
-  PLATE_BADGE_BORDER_DASH,
-  PLATE_BADGE_BORDER_WIDTH,
-  PLATE_BADGE_CORNER_RADIUS_CM,
-  PLATE_BADGE_FILL,
+  CABINA_CAPTION_FONT_SIZE,
   PLATE_BADGE_FONT_FAMILY,
-  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_LETTER_SPACING_EM,
   PLATE_BADGE_TEXT_COLOR,
+  PLATE_BADGE_TOP_CM,
   PLATE_INPUT_ID,
   WIDTH_QUOTA_BASELINE_CM,
   plateBadgeLayout,
@@ -86,25 +83,25 @@ const PAN_TOP_MARGIN_PX = 40;
 /** Margine (px) riservato in basso alla didascalia "PORTE POSTERIORI". */
 const PAN_BOTTOM_MARGIN_PX = 50;
 /**
+ * Altezza (cm reali) della fascia sopra la Cabina occupata dal testo della targa
+ * (corpo base 30 px), dalla didascalia `▲ CABINA ▲` e dalle quote: a zoom
+ * elevato questa distanza cresce in pixel e gli elementi uscivano tagliati fuori
+ * dal bordo alto del viewport. È **derivata** dal modulo condiviso
+ * `utils/plateBadge.ts` (punto più alto dell'intestazione, `-71 cm`), quindi
+ * ingrandire ancora il corpo della targa non può più tagliarne la cima: il
+ * limite di pan del Caso B la include, scalata per lo zoom.
+ */
+const CABINA_LABEL_OFFSET_CM = -PLATE_BADGE_TOP_CM;
+/**
  * Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo
  * per decidere se il pianale entra interamente nello schermo (Caso A).
  *
- * Vale **110 cm**, cioè il doppio della fascia di intestazione: con il badge
- * targa che spinge il bordo alto a −55 cm (card `−48 … −28 cm`, didascalia
- * `▲ CABINA ▲` a −15 cm e quota larghezza a −4,5 cm), il Caso A centra il
- * pianale lasciando metà del margine sopra e metà sotto, quindi servono almeno
- * `2 × 55 cm` perché la card non venga mai tagliata dal bordo alto.
+ * Vale il **doppio** della fascia di intestazione: nel Caso A il pianale è
+ * centrato e metà del margine finisce sopra la Cabina, quindi servono almeno
+ * `2 × CABINA_LABEL_OFFSET_CM` perché la targa a 30 px non venga mai tagliata
+ * dal bordo alto anche nella condizione limite `(L + margine) × zoom = containerH`.
  */
-const PAN_LABEL_MARGIN_CM = 110;
-/**
- * Altezza (cm reali) della fascia sopra la Cabina occupata dal badge targa,
- * dalla didascalia `▲ CABINA ▲` e dalle quote: a zoom elevato questa distanza
- * cresce in pixel e gli elementi uscivano tagliati fuori dal bordo alto del
- * viewport. Il limite di pan del Caso B la include, scalata per lo zoom, così
- * tutto resta interamente visibile a 100%, 200% e 400%, senza spazi vuoti
- * eccessivi.
- */
-const CABINA_LABEL_OFFSET_CM = 55;
+const PAN_LABEL_MARGIN_CM = 2 * CABINA_LABEL_OFFSET_CM;
 
 /**
  * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
@@ -422,10 +419,15 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
 
   /**
-   * Badge Targa / Identificativo Mezzo: card tecnica centrata sull'asse del
-   * pianale nella fascia `-48 … -28 cm`, sopra la didascalia `▲ CABINA ▲`. La
+   * Badge Targa / Identificativo Mezzo: **solo testo**, centrato sull'asse del
+   * pianale nella fascia di intestazione (corpo base 30 px), sopra la didascalia
+   * `▲ CABINA ▲`. La scritta può sforare di 50 cm per lato oltre le sponde: la
    * geometria arriva dal modulo condiviso `utils/plateBadge.ts`, quindi canvas,
-   * snapshot PNG e scheda A4 disegnano esattamente la stessa card.
+   * snapshot PNG e scheda A4 disegnano esattamente la stessa scritta.
+   *
+   * A riposo — targa vuota o di soli spazi — la funzione restituisce `null`:
+   * l'area sopra la Cabina resta completamente pulita e trasparente, senza
+   * rettangoli tratteggiati né testi segnaposto.
    */
   const plateBadge = plateBadgeLayout(vehicle.width, plate);
 
@@ -1384,58 +1386,59 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               strokeDasharray="16 8"
             />
 
-            {/* BADGE TARGA / IDENTIFICATIVO MEZZO: card vettoriale in stile
-                targa, centrata sull'asse del pianale nella fascia
-                `-48 … -28 cm`, sopra la didascalia ▲ CABINA ▲. Con targa vuota
-                mostra il segnaposto discreto con bordo tratteggiato; il click
-                riporta il focus sul campo di testo della sidebar, così il badge
-                funziona da secondo aggancio della stessa informazione. */}
-            <g
-              id="canvas-plate-badge"
-              className="cursor-pointer"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                // Il click è del badge: non deve azzerare la selezione dei colli.
-                e.stopPropagation();
-                document.getElementById(PLATE_INPUT_ID)?.focus();
-              }}
-            >
-              <rect
-                x={plateBadge.x}
-                y={plateBadge.top}
-                width={plateBadge.width}
-                height={plateBadge.height}
-                rx={PLATE_BADGE_CORNER_RADIUS_CM}
-                fill={PLATE_BADGE_FILL}
-                stroke={PLATE_BADGE_BORDER_COLOR}
-                strokeWidth={PLATE_BADGE_BORDER_WIDTH}
-                strokeDasharray={plateBadge.hasPlate ? undefined : PLATE_BADGE_BORDER_DASH}
-              />
-              <text
-                x={plateBadge.centerX}
-                y={plateBadge.centerY}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fontFamily={PLATE_BADGE_FONT_FAMILY}
-                fontSize={plateBadge.fontSize}
-                fontWeight="bold"
-                fill={
-                  plateBadge.hasPlate
-                    ? PLATE_BADGE_TEXT_COLOR
-                    : PLATE_BADGE_PLACEHOLDER_COLOR
-                }
-                className="pointer-events-none select-none"
+            {/* BADGE TARGA / IDENTIFICATIVO MEZZO: **solo testo** monospaziato
+                tecnico, centrato sull'asse del pianale nella fascia di
+                intestazione (corpo base 30 px), sopra la didascalia ▲ CABINA ▲.
+                - **Silente a riposo:** con targa vuota il blocco non esiste
+                  affatto (nessun rettangolo, nessun tratteggio, nessun
+                  segnaposto): l'area sopra la Cabina è pulita e trasparente.
+                - **Zero bordo:** nessun contorno (`stroke="none"`), solo testo.
+                - **Gerarchia:** corpo base 30 px, il doppio dei 15 px di
+                  `▲ CABINA ▲`, ridotto solo per le targhe molto lunghe. La
+                  fascia di scrittura può sforare di 50 cm per lato oltre le
+                  sponde del mezzo (`vehicle.width + 100` cm).
+                Il click riporta il focus sul campo di testo della sidebar, così
+                il badge funziona da secondo aggancio della stessa informazione. */}
+            {plateBadge && (
+              <g
+                id="canvas-plate-badge"
+                className="cursor-pointer"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  // Il click è del badge: non deve azzerare la selezione dei colli.
+                  e.stopPropagation();
+                  document.getElementById(PLATE_INPUT_ID)?.focus();
+                }}
               >
-                {plateBadge.label}
-              </text>
-            </g>
+                <text
+                  x={plateBadge.centerX}
+                  y={plateBadge.centerY}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontFamily={PLATE_BADGE_FONT_FAMILY}
+                  fontSize={plateBadge.fontSize}
+                  fontWeight="900"
+                  letterSpacing={`${PLATE_BADGE_LETTER_SPACING_EM}em`}
+                  stroke="none"
+                  strokeWidth={0}
+                  fill={PLATE_BADGE_TEXT_COLOR}
+                  className="pointer-events-none select-none"
+                >
+                  {plateBadge.label}
+                </text>
+              </g>
+            )}
 
-            {/* Intestazione: CABINA (sotto il badge targa) */}
+            {/* Intestazione: CABINA (sotto la targa). Il corpo è la costante
+                condivisa `CABINA_CAPTION_FONT_SIZE`: è la quota bassa della
+                gerarchia su cui è calcolata la posizione della targa. */}
             <text
+              id="canvas-cabina-caption"
               x={vehicle.width / 2}
               y={CABINA_CAPTION_BASELINE_CM}
               textAnchor="middle"
-              className="text-[15px] font-bold fill-slate-700 tracking-wider"
+              fontSize={CABINA_CAPTION_FONT_SIZE}
+              className="font-bold fill-slate-700 tracking-wider"
             >
               ▲ CABINA ▲
             </text>

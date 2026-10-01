@@ -546,23 +546,24 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           </div>
         )}
 
-        {/* Targa / Identificativo Mezzo: campo libero (targhe, codici motrice o
-            diciture di piazzale tipo "XA000BB COME ARRIVA"). Il valore viene
-            riportato in maiuscolo sul badge sopra la Cabina, nello snapshot PNG
-            e nell'intestazione della scheda di carico A4. */}
+        {/* Targa: titolo ufficiale di macro-sezione, identico nello stile a
+            "Configurazione Mezzo" e "Aggiungi Colli". Il campo è pulito a riposo
+            (nessun placeholder) e il valore viene riportato in maiuscolo sul
+            testo sopra la Cabina, nello snapshot PNG e nell'intestazione della
+            scheda di carico A4. */}
         <div className="space-y-1">
           <label
             htmlFor={PLATE_INPUT_ID}
-            className="text-[10px] font-bold text-slate-500 uppercase tracking-wider"
+            className="text-xs font-bold text-slate-700 uppercase tracking-wider"
           >
-            Targa / Identificativo Mezzo
+            Targa
           </label>
           <input
             id={PLATE_INPUT_ID}
             type="text"
             value={plate}
             onChange={(e) => onUpdatePlate(e.target.value.toUpperCase())}
-            placeholder="Es. XA000BB COME ARRIVA"
+            placeholder=""
             maxLength={40}
             className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs font-mono font-bold rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 uppercase tracking-wide"
           />
