@@ -64,6 +64,9 @@ export default function App() {
   const [notes, setNotes] = useState<SideNote[]>([]);
   // Nota attualmente selezionata (null = nessuna): alimenta il pannello sidebar.
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  // Targa / identificativo del mezzo: campo libero (es. "XA000BB COME ARRIVA").
+  // Alimenta il badge tecnico sopra la Cabina, lo snapshot PNG e la scheda A4.
+  const [vehiclePlate, setVehiclePlate] = useState<string>('');
 
   /* ------------------------------------------------------------------------ *
    *  MOTORE UNDO / REDO (CRONOLOGIA A SNAPSHOT)
@@ -554,6 +557,7 @@ export default function App() {
             vehicle={vehicle}
             items={items}
             notes={notes}
+            plate={vehiclePlate}
             selectedItemIds={selectedItemIds}
             selectedNoteId={selectedNoteId}
             labelDensity={labelDensity}
@@ -573,6 +577,8 @@ export default function App() {
           <ControlDeck
             vehicle={vehicle}
             onSelectVehicle={setVehicle}
+            plate={vehiclePlate}
+            onUpdatePlate={setVehiclePlate}
             onAddItem={handleAddItem}
             onRotateSelected={handleRotateSelected}
             onDeleteSelected={handleDeleteSelected}
@@ -596,7 +602,13 @@ export default function App() {
       </div>
 
       {/* Scheda di carico A4: presente nel DOM, visibile solo su carta. */}
-      <PrintReport vehicle={vehicle} items={items} notes={notes} labelDensity={labelDensity} />
+      <PrintReport
+        vehicle={vehicle}
+        items={items}
+        notes={notes}
+        plate={vehiclePlate}
+        labelDensity={labelDensity}
+      />
     </>
   );
 }

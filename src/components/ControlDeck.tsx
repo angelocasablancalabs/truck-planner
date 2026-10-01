@@ -28,6 +28,7 @@ import {
   noteGeometry,
   resolveNoteFontSize,
 } from '../utils/sideNotes';
+import { PLATE_INPUT_ID } from '../utils/plateBadge';
 import {
   Truck,
   RotateCw,
@@ -97,6 +98,13 @@ interface PalletBatchDraft {
 interface ControlDeckProps {
   vehicle: VehicleConfig;
   onSelectVehicle: (v: VehicleConfig) => void;
+  /**
+   * Targa / identificativo del mezzo: campo libero (es. `XA000BB COME ARRIVA`)
+   * che alimenta il badge tecnico sopra la Cabina, lo snapshot PNG e la scheda
+   * A4. Il click sul badge del canvas riporta il focus su questo input.
+   */
+  plate: string;
+  onUpdatePlate: (value: string) => void;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
   onRotateSelected: () => void;
   onDeleteSelected: () => void;
@@ -155,6 +163,8 @@ const NOTE_FONT_PREVIEW_CLASS: Record<number, string> = {
 export const ControlDeck: React.FC<ControlDeckProps> = ({
   vehicle,
   onSelectVehicle,
+  plate,
+  onUpdatePlate,
   onAddItem,
   onRotateSelected,
   onDeleteSelected,
@@ -213,7 +223,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     if (isCopying) return;
     setIsCopying(true);
 
-    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity, notes);
+    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity, notes, plate);
 
     setIsCopying(false);
     setCopyFeedback(copied ? 'copied' : 'downloaded');
@@ -535,6 +545,28 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             </label>
           </div>
         )}
+
+        {/* Targa / Identificativo Mezzo: campo libero (targhe, codici motrice o
+            diciture di piazzale tipo "XA000BB COME ARRIVA"). Il valore viene
+            riportato in maiuscolo sul badge sopra la Cabina, nello snapshot PNG
+            e nell'intestazione della scheda di carico A4. */}
+        <div className="space-y-1">
+          <label
+            htmlFor={PLATE_INPUT_ID}
+            className="text-[10px] font-bold text-slate-500 uppercase tracking-wider"
+          >
+            Targa / Identificativo Mezzo
+          </label>
+          <input
+            id={PLATE_INPUT_ID}
+            type="text"
+            value={plate}
+            onChange={(e) => onUpdatePlate(e.target.value.toUpperCase())}
+            placeholder="Es. XA000BB COME ARRIVA"
+            maxLength={40}
+            className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs font-mono font-bold rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 uppercase tracking-wide"
+          />
+        </div>
       </div>
 
       {/* Catalogo Colli — accordion multifunzione (click singolo + lotti) */}

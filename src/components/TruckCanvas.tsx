@@ -49,6 +49,20 @@ import {
   noteMinX,
   resolveNoteLayouts,
 } from '../utils/sideNotes';
+import {
+  CABINA_CAPTION_BASELINE_CM,
+  PLATE_BADGE_BORDER_COLOR,
+  PLATE_BADGE_BORDER_DASH,
+  PLATE_BADGE_BORDER_WIDTH,
+  PLATE_BADGE_CORNER_RADIUS_CM,
+  PLATE_BADGE_FILL,
+  PLATE_BADGE_FONT_FAMILY,
+  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_TEXT_COLOR,
+  PLATE_INPUT_ID,
+  WIDTH_QUOTA_BASELINE_CM,
+  plateBadgeLayout,
+} from '../utils/plateBadge';
 
 /** Colori del rettangolo di selezione (lasso) e della selezione attiva. */
 const SELECTION_COLOR = '#2563EB';
@@ -71,16 +85,26 @@ const clipIdForNote = (noteId: string): string => `note-clip-${noteId}`;
 const PAN_TOP_MARGIN_PX = 40;
 /** Margine (px) riservato in basso alla didascalia "PORTE POSTERIORI". */
 const PAN_BOTTOM_MARGIN_PX = 50;
-/** Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo. */
-const PAN_LABEL_MARGIN_CM = 80;
 /**
- * Altezza (cm reali) della fascia sopra la Cabina occupata dalla didascalia
- * `▲ CABINA ▲` e dalle quote: a zoom elevato questa distanza cresce in pixel e
- * la scritta usciva tagliata fuori dal bordo alto del viewport. Il limite di pan
- * del Caso B la include, scalata per lo zoom, così resta sempre interamente
- * visibile a 100%, 200% e 400%, senza spazi vuoti eccessivi.
+ * Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo
+ * per decidere se il pianale entra interamente nello schermo (Caso A).
+ *
+ * Vale **110 cm**, cioè il doppio della fascia di intestazione: con il badge
+ * targa che spinge il bordo alto a −55 cm (card `−48 … −28 cm`, didascalia
+ * `▲ CABINA ▲` a −15 cm e quota larghezza a −4,5 cm), il Caso A centra il
+ * pianale lasciando metà del margine sopra e metà sotto, quindi servono almeno
+ * `2 × 55 cm` perché la card non venga mai tagliata dal bordo alto.
  */
-const CABINA_LABEL_OFFSET_CM = 32;
+const PAN_LABEL_MARGIN_CM = 110;
+/**
+ * Altezza (cm reali) della fascia sopra la Cabina occupata dal badge targa,
+ * dalla didascalia `▲ CABINA ▲` e dalle quote: a zoom elevato questa distanza
+ * cresce in pixel e gli elementi uscivano tagliati fuori dal bordo alto del
+ * viewport. Il limite di pan del Caso B la include, scalata per lo zoom, così
+ * tutto resta interamente visibile a 100%, 200% e 400%, senza spazi vuoti
+ * eccessivi.
+ */
+const CABINA_LABEL_OFFSET_CM = 55;
 
 /**
  * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
@@ -94,12 +118,13 @@ const CABINA_LABEL_OFFSET_CM = 32;
  *
  * - **Caso A** — il camion (compresi gli eventuali colli sbordati) entra
  *   interamente nell'altezza dello schermo
- *   (`(effectiveLength + 80) * zoom <= containerH`): il pianale resta centrato
- *   verticalmente nel viewport e non può scivolare via.
+ *   (`(effectiveLength + PAN_LABEL_MARGIN_CM) * zoom <= containerH`): il pianale
+ *   resta centrato verticalmente nel viewport e non può scivolare via.
  * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
- *   si arresta a ridosso del bordo alto (`maxPanY = 40 + 32 * zoom`, che tiene
- *   dentro anche la didascalia `▲ CABINA ▲`) e le Porte posteriori a ridosso di
- *   quello basso (`minPanY = containerH - 50 - effectiveLength * zoom`).
+ *   si arresta a ridosso del bordo alto (`maxPanY = 40 + 55 * zoom`, che tiene
+ *   dentro anche il badge targa e la didascalia `▲ CABINA ▲`) e le Porte
+ *   posteriori a ridosso di quello basso
+ *   (`minPanY = containerH - 50 - effectiveLength * zoom`).
  */
 const clampPanY = (
   panY: number,
@@ -276,6 +301,12 @@ interface TruckCanvasProps {
   items: PlacedItem[];
   /** Note laterali: vivono nella corsia a destra della parete del mezzo. */
   notes: SideNote[];
+  /**
+   * Targa / identificativo del mezzo: disegnato nel badge tecnico sopra la
+   * Cabina, centrato sull'asse del pianale e aggiornato in tempo reale. Un click
+   * sul badge riporta il focus sul campo di testo della sidebar.
+   */
+  plate: string;
   selectedItemIds: string[];
   /** Nota selezionata (null = nessuna): bordo blu sulla card e pannello sidebar. */
   selectedNoteId: string | null;
@@ -305,6 +336,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   vehicle,
   items,
   notes,
+  plate,
   selectedItemIds,
   selectedNoteId,
   labelDensity,
@@ -388,6 +420,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   // Badge del lato destro: subito oltre la parete destra del pianale.
   const rightLdmBadgeLeftX = ldmBadgeRightLeftX(vehicle.width);
   const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
+
+  /**
+   * Badge Targa / Identificativo Mezzo: card tecnica centrata sull'asse del
+   * pianale nella fascia `-48 … -28 cm`, sopra la didascalia `▲ CABINA ▲`. La
+   * geometria arriva dal modulo condiviso `utils/plateBadge.ts`, quindi canvas,
+   * snapshot PNG e scheda A4 disegnano esattamente la stessa card.
+   */
+  const plateBadge = plateBadgeLayout(vehicle.width, plate);
 
   /**
    * Note laterali: posizionamento **liberamente 2D**. Di default nascono a
@@ -1344,10 +1384,56 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               strokeDasharray="16 8"
             />
 
-            {/* Intestazione: CABINA */}
+            {/* BADGE TARGA / IDENTIFICATIVO MEZZO: card vettoriale in stile
+                targa, centrata sull'asse del pianale nella fascia
+                `-48 … -28 cm`, sopra la didascalia ▲ CABINA ▲. Con targa vuota
+                mostra il segnaposto discreto con bordo tratteggiato; il click
+                riporta il focus sul campo di testo della sidebar, così il badge
+                funziona da secondo aggancio della stessa informazione. */}
+            <g
+              id="canvas-plate-badge"
+              className="cursor-pointer"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                // Il click è del badge: non deve azzerare la selezione dei colli.
+                e.stopPropagation();
+                document.getElementById(PLATE_INPUT_ID)?.focus();
+              }}
+            >
+              <rect
+                x={plateBadge.x}
+                y={plateBadge.top}
+                width={plateBadge.width}
+                height={plateBadge.height}
+                rx={PLATE_BADGE_CORNER_RADIUS_CM}
+                fill={PLATE_BADGE_FILL}
+                stroke={PLATE_BADGE_BORDER_COLOR}
+                strokeWidth={PLATE_BADGE_BORDER_WIDTH}
+                strokeDasharray={plateBadge.hasPlate ? undefined : PLATE_BADGE_BORDER_DASH}
+              />
+              <text
+                x={plateBadge.centerX}
+                y={plateBadge.centerY}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontFamily={PLATE_BADGE_FONT_FAMILY}
+                fontSize={plateBadge.fontSize}
+                fontWeight="bold"
+                fill={
+                  plateBadge.hasPlate
+                    ? PLATE_BADGE_TEXT_COLOR
+                    : PLATE_BADGE_PLACEHOLDER_COLOR
+                }
+                className="pointer-events-none select-none"
+              >
+                {plateBadge.label}
+              </text>
+            </g>
+
+            {/* Intestazione: CABINA (sotto il badge targa) */}
             <text
               x={vehicle.width / 2}
-              y={-34}
+              y={CABINA_CAPTION_BASELINE_CM}
               textAnchor="middle"
               className="text-[15px] font-bold fill-slate-700 tracking-wider"
             >
@@ -1357,7 +1443,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             {/* Quota larghezza utile */}
             <text
               x={vehicle.width / 2}
-              y={-10}
+              y={WIDTH_QUOTA_BASELINE_CM}
               textAnchor="middle"
               className="text-[11px] font-mono fill-slate-500"
             >

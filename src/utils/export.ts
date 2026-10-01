@@ -31,6 +31,19 @@ import {
   NOTE_PADDING_CM,
   resolveNoteLayouts,
 } from './sideNotes';
+import {
+  CABINA_CAPTION_BASELINE_CM,
+  PLATE_BADGE_BORDER_COLOR,
+  PLATE_BADGE_BORDER_DASH,
+  PLATE_BADGE_BORDER_WIDTH,
+  PLATE_BADGE_CORNER_RADIUS_CM,
+  PLATE_BADGE_FILL,
+  PLATE_BADGE_FONT_FAMILY,
+  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_TEXT_COLOR,
+  WIDTH_QUOTA_BASELINE_CM,
+  plateBadgeLayout,
+} from './plateBadge';
 
 /* -------------------------------------------------------------------------- *
  *  SPRINT D — ESPORTAZIONE IMMAGINE
@@ -78,8 +91,13 @@ const SCENE_MARGIN_CM = 40;
  */
 const SCENE_PADDING_CM = 20;
 
-/** Bordo superiore dell'inquadratura (cm): spazio per la scritta `▲ CABINA ▲`. */
-const SCENE_TOP_CM = -40;
+/**
+ * Bordo superiore dell'inquadratura (cm): spazio per la card targa
+ * (`-48 … -28 cm`), per la scritta `▲ CABINA ▲` e per la quota larghezza.
+ * Con `-65 cm` l'immagine lascia 17 cm d'aria sopra il badge: nulla viene mai
+ * tagliato, a nessuna larghezza di targa.
+ */
+const SCENE_TOP_CM = -65;
 
 /** Corpi testo (cm reali), allineati al rendering del canvas a schermo. */
 const FONT = {
@@ -425,26 +443,65 @@ const renderNotes = (notes: SideNote[]): string => {
 };
 
 /**
+ * Badge Targa / Identificativo Mezzo nello snapshot SVG.
+ *
+ * Stessa card vettoriale del canvas a schermo (geometria dal modulo condiviso
+ * `utils/plateBadge.ts`): rettangolo `rx=3` con sfondo `#F8FAFC` e bordo
+ * antracite, centrato sull'asse del pianale nella fascia `-48 … -28 cm`.
+ * Con targa vuota il bordo diventa tratteggiato e compare il segnaposto
+ * `[ TARGA / IDENTIFICATIVO ]` in grigio; con targa digitata il testo è in
+ * maiuscolo monospaziato in grassetto.
+ *
+ * @param vehicle Configurazione del mezzo (per larghezza e centratura)
+ * @param plate   Targa / identificativo digitato dall'operatore
+ */
+const renderPlateBadge = (vehicle: VehicleConfig, plate: string): string => {
+  const badge = plateBadgeLayout(vehicle.width, plate);
+  const dash = badge.hasPlate ? '' : ` stroke-dasharray="${PLATE_BADGE_BORDER_DASH}"`;
+  const textColor = badge.hasPlate ? PLATE_BADGE_TEXT_COLOR : PLATE_BADGE_PLACEHOLDER_COLOR;
+
+  return [
+    `<g id="export-plate-badge">`,
+    `<rect x="${round(badge.x)}" y="${round(badge.top)}" width="${round(
+      badge.width
+    )}" height="${round(badge.height)}" rx="${PLATE_BADGE_CORNER_RADIUS_CM}" fill="${
+      PLATE_BADGE_FILL
+    }" stroke="${PLATE_BADGE_BORDER_COLOR}" stroke-width="${PLATE_BADGE_BORDER_WIDTH}"${dash}/>`,
+    `<text x="${round(badge.centerX)}" y="${round(
+      badge.centerY
+    )}" text-anchor="middle" dominant-baseline="middle" font-family="${
+      PLATE_BADGE_FONT_FAMILY
+    }" font-size="${round(badge.fontSize)}" font-weight="bold" fill="${textColor}">${escapeXml(
+      badge.label
+    )}</text>`,
+    `</g>`,
+  ].join('');
+};
+
+/**
  * Costruisce lo snapshot SVG autonomo e pulito del pianale.
  *
  * Contenuto (in cm reali, Y = 0 in alto verso la Cabina):
  * sfondo bianco, piano di carico, tacche metriche ogni metro, quota nominale
  * 13,20 m (sui mezzi che la raggiungono), linea guida e badge del contatore
  * dinamico LDM, tutti i colli con colore/bordo/testo ritagliato dal proprio
- * clipPath, le note laterali **alle loro coordinate 2D** (se presenti), sponde
- * laterali, parete Cabina, linea tratteggiata delle porte posteriori e
- * didascalie. Nessun elemento di interfaccia.
+ * clipPath, le note laterali **alle loro coordinate 2D** (se presenti), il badge
+ * **targa / identificativo mezzo** sopra la Cabina, sponde laterali, parete
+ * Cabina, linea tratteggiata delle porte posteriori e didascalie. Nessun
+ * elemento di interfaccia.
  *
  * @param vehicle      Configurazione del mezzo
  * @param items        Colli stivati
  * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
  * @param notes        Note laterali di carico da includere nell'immagine
+ * @param plate        Targa / identificativo del mezzo (default: segnaposto)
  */
 export const buildPianoSvg = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
   labelDensity: LabelDensity,
-  notes: SideNote[] = []
+  notes: SideNote[] = [],
+  plate: string = ''
 ): PianoSnapshot => {
   const extent = getPianoExtent(vehicle, items, labelDensity, notes);
   const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
@@ -596,10 +653,16 @@ export const buildPianoSvg = (
     `<line x1="0" y1="${vehicle.length}" x2="${vehicle.width}" y2="${vehicle.length}" stroke="${COLORS.wall}" stroke-width="3" stroke-dasharray="16 8"/>`
   );
 
-  // Intestazioni e quote.
+  // Badge targa / identificativo mezzo: card tecnica sopra la Cabina, con la
+  // stessa geometria del canvas a schermo (fascia `-48 … -28 cm`).
+  parts.push(renderPlateBadge(vehicle, plate));
+
+  // Intestazioni e quote. La didascalia `▲ CABINA ▲` vive SOTTO la card targa,
+  // quindi ha una quota fissa condivisa (non più relativa al bordo superiore
+  // dell'inquadratura, che ora è occupato dal badge).
   parts.push(
-    `<text x="${vehicle.width / 2}" y="${round(extent.minY + FONT.caption * 1.05)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ CABINA ▲</text>`,
-    `<text x="${vehicle.width / 2}" y="${round(-FONT.quota * 0.4)}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.quota}" fill="${COLORS.gridText}">${vehicle.width} cm</text>`,
+    `<text x="${vehicle.width / 2}" y="${CABINA_CAPTION_BASELINE_CM}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ CABINA ▲</text>`,
+    `<text x="${vehicle.width / 2}" y="${WIDTH_QUOTA_BASELINE_CM}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.quota}" fill="${COLORS.gridText}">${vehicle.width} cm</text>`,
     `<text x="${vehicle.width / 2}" y="${round(extent.doorLabelY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption * 0.93}" font-weight="bold" fill="${COLORS.caption}">PORTE POSTERIORI</text>`
   );
 
@@ -694,18 +757,22 @@ const downloadBlob = (blob: Blob, fileName: string): void => {
  * @param items        Colli stivati
  * @param labelDensity Densità delle etichette applicata allo snapshot
  * @param notes        Note laterali di carico da riportare nell'immagine
+ * @param plate        Targa / identificativo del mezzo, riportato nel badge
  * @returns `true` se l'immagine è finita negli appunti, `false` se è stata scaricata
  */
 export const copyCanvasToClipboard = async (
   vehicle: VehicleConfig,
   items: PlacedItem[],
   labelDensity: LabelDensity,
-  notes: SideNote[] = []
+  notes: SideNote[] = [],
+  plate: string = ''
 ): Promise<boolean> => {
   let pngBlob: Blob;
 
   try {
-    pngBlob = await rasterizeSnapshotToPng(buildPianoSvg(vehicle, items, labelDensity, notes));
+    pngBlob = await rasterizeSnapshotToPng(
+      buildPianoSvg(vehicle, items, labelDensity, notes, plate)
+    );
   } catch (error) {
     console.error('[export] Generazione dello snapshot PNG non riuscita:', error);
     return false;

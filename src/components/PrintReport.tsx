@@ -5,6 +5,19 @@ import { LDM_BADGE, LDM_BADGE_CENTER_X, LDM_BADGE_COLOR, LDM_BADGE_LEFT_X, LDM_B
 import { calculateLdmMetrics } from '../utils/snapping';
 import { getPianoExtent, noteClipId } from '../utils/export';
 import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
+import {
+  CABINA_CAPTION_BASELINE_CM,
+  PLATE_BADGE_BORDER_COLOR,
+  PLATE_BADGE_BORDER_DASH,
+  PLATE_BADGE_BORDER_WIDTH,
+  PLATE_BADGE_CORNER_RADIUS_CM,
+  PLATE_BADGE_FILL,
+  PLATE_BADGE_FONT_FAMILY,
+  PLATE_BADGE_PLACEHOLDER_COLOR,
+  PLATE_BADGE_TEXT_COLOR,
+  WIDTH_QUOTA_BASELINE_CM,
+  plateBadgeLayout,
+} from '../utils/plateBadge';
 
 /* -------------------------------------------------------------------------- *
  *  SPRINT D — SCHEDA DI CARICO A4 / PDF
@@ -122,6 +135,11 @@ interface PrintReportProps {
   items: PlacedItem[];
   /** Note laterali di carico: incluse nel disegno vettoriale della scheda. */
   notes: SideNote[];
+  /**
+   * Targa / identificativo del mezzo: disegnato nel badge sopra la Cabina e
+   * riportato come voce formale `Targa: …` nell'intestazione della scheda.
+   */
+  plate: string;
   /** Densità etichette dell'app: con `minimal` il disegno resta pulito. */
   labelDensity: LabelDensity;
 }
@@ -141,6 +159,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
   vehicle,
   items,
   notes,
+  plate,
   labelDensity,
 }) => {
   // Data/ora di generazione: aggiornata all'apertura della stampa del browser.
@@ -153,6 +172,13 @@ export const PrintReport: React.FC<PrintReportProps> = ({
   }, []);
 
   const extent = getPianoExtent(vehicle, items, labelDensity, notes);
+  /**
+   * Badge targa / identificativo mezzo: geometria dal modulo condiviso
+   * `utils/plateBadge.ts`, identica al canvas a schermo e allo snapshot PNG. Il
+   * bordo superiore dell'inquadratura (`minY = -65 cm`) arriva dalla stessa
+   * `getPianoExtent`, quindi la card non viene mai tagliata.
+   */
+  const plateBadge = plateBadgeLayout(vehicle.width, plate);
   const rows = buildSummaryRows(items);
   /** Righe di riepilogo delle note laterali (titolo, quota e testo). */
   const noteRows = buildNoteRows(notes);
@@ -239,6 +265,12 @@ export const PrintReport: React.FC<PrintReportProps> = ({
           <div className="text-[10pt] font-bold text-slate-900">{vehicleName}</div>
           <div className="font-mono">
             Lunghezza utile: {vehicle.length} cm — Larghezza utile: {vehicle.width} cm
+          </div>
+          {/* Voce formale della targa: resta nel documento anche se il disegno
+              è molto scalato, e vale `N.D.` quando nessuna targa è stata
+              digitata in sidebar. */}
+          <div id="print-plate-row" className="font-mono font-bold text-slate-900">
+            Targa: {plate || 'N.D.'}
           </div>
           <div className="font-mono font-bold">{items.length} colli caricati</div>
           {notes.length > 0 && (
@@ -513,10 +545,41 @@ export const PrintReport: React.FC<PrintReportProps> = ({
             }
           )}
 
-          {/* Intestazioni */}
+          {/* Badge targa / identificativo mezzo: card tecnica sopra la Cabina,
+              con la stessa geometria del canvas a schermo (fascia -48 … -28 cm).
+              Con targa vuota: segnaposto discreto e bordo tratteggiato. */}
+          <g id="print-plate-badge">
+            <rect
+              x={round(plateBadge.x)}
+              y={round(plateBadge.top)}
+              width={round(plateBadge.width)}
+              height={round(plateBadge.height)}
+              rx={PLATE_BADGE_CORNER_RADIUS_CM}
+              fill={PLATE_BADGE_FILL}
+              stroke={PLATE_BADGE_BORDER_COLOR}
+              strokeWidth={PLATE_BADGE_BORDER_WIDTH}
+              strokeDasharray={plateBadge.hasPlate ? undefined : PLATE_BADGE_BORDER_DASH}
+            />
+            <text
+              x={round(plateBadge.centerX)}
+              y={round(plateBadge.centerY)}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontFamily={PLATE_BADGE_FONT_FAMILY}
+              fontSize={round(plateBadge.fontSize)}
+              fontWeight="bold"
+              fill={
+                plateBadge.hasPlate ? PLATE_BADGE_TEXT_COLOR : PLATE_BADGE_PLACEHOLDER_COLOR
+              }
+            >
+              {plateBadge.label}
+            </text>
+          </g>
+
+          {/* Intestazioni (la didascalia CABINA vive SOTTO la card targa) */}
           <text
             x={vehicle.width / 2}
-            y={round(extent.minY + PRINT_FONT.caption * 1.05)}
+            y={CABINA_CAPTION_BASELINE_CM}
             textAnchor="middle"
             fontFamily={FONT_FAMILY}
             fontSize={PRINT_FONT.caption}
@@ -527,7 +590,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
           </text>
           <text
             x={vehicle.width / 2}
-            y={round(-PRINT_FONT.quota * 0.4)}
+            y={WIDTH_QUOTA_BASELINE_CM}
             textAnchor="middle"
             fontFamily={MONO_FONT_FAMILY}
             fontSize={PRINT_FONT.quota}
