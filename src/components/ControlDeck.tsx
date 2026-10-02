@@ -444,7 +444,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400 hover:bg-blue-50';
 
   return (
-    <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto space-y-6">
+    <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto [scrollbar-gutter:stable] space-y-6">
       {/* Header */}
       <div className="border-b border-slate-200 pb-3">
         <h1 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2">

@@ -6,6 +6,15 @@ import { calculateLdmMetrics } from '../utils/snapping';
 import { getPianoExtent, noteClipId } from '../utils/export';
 import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
 import {
+  AVERAGE_CHAR_WIDTH_RATIO,
+  clipIdForItem,
+  LABEL_FONT_SIZE,
+  LABEL_WRAP_FONT_SIZE,
+  NARROW_ITEM_WIDTH_CM,
+  shouldWrapLabel,
+  splitLabelIntoTwoLines,
+} from '../utils/labels';
+import {
   CABINA_CAPTION_BASELINE_CM,
   PLATE_BADGE_FONT_FAMILY,
   PLATE_BADGE_LETTER_SPACING_EM,
@@ -77,9 +86,15 @@ const round = (value: number): number => Math.round(value * 100) / 100;
  */
 const printNoteClipId = (noteId: string): string => `print-${noteClipId(noteId)}`;
 
-/** Tronca il testo perché non esca dal rettangolo del collo. */
+/**
+ * Tronca il testo perché non esca dal rettangolo del collo.
+ *
+ * È solo l'ultima rete di sicurezza: i nomi composti vengono prima mandati a
+ * capo su due righe da `shouldWrapLabel` / `splitLabelIntoTwoLines`, esattamente
+ * come sul canvas a schermo e nello snapshot PNG (modulo `utils/labels.ts`).
+ */
 const truncateToWidth = (text: string, maxWidthCm: number, fontSizeCm: number): string => {
-  const maxChars = Math.max(1, Math.floor(maxWidthCm / (fontSizeCm * 0.58)));
+  const maxChars = Math.max(1, Math.floor(maxWidthCm / (fontSizeCm * AVERAGE_CHAR_WIDTH_RATIO)));
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
 };
@@ -429,12 +444,158 @@ export const PrintReport: React.FC<PrintReportProps> = ({
             </g>
           )}
 
-          {/* Colli stivati (nessun contorno di selezione in stampa) */}
+          {/* Colli stivati (nessun contorno di selezione in stampa).
+              Le etichette adottano la STESSA logica multi-riga del canvas a
+              schermo (`TruckCanvas.tsx`) e dello snapshot PNG (`export.ts`),
+              dagli helper condivisi di `utils/labels.ts`: i nomi composti
+              ("MIGHIRIAN c/o RAOUL") vanno a capo su due `<tspan>` centrate
+              invece di essere troncati con i puntini. Il testo resta comunque
+              ritagliato dal `clipPath` del proprio collo, quindi non può
+              sbordare sui colli adiacenti. */}
           {items.map((item) => {
             const centerX = item.width / 2;
             const centerY = item.length / 2;
-            const nameFont = Math.min(PRINT_FONT.name, item.width * 0.2, item.length * 0.28);
+            const isNarrow = item.width <= NARROW_ITEM_WIDTH_CM;
+            const baseNameFont = Math.min(PRINT_FONT.name, item.width * 0.2, item.length * 0.28);
             const dimFont = Math.min(PRINT_FONT.dimensions, item.width * 0.16, item.length * 0.22);
+            /**
+             * Due righe bilanciate dal modulo condiviso: `null` quando il nome
+             * sta comodamente su una riga sola.
+             */
+            const lines = shouldWrapLabel(item.name, item.width)
+              ? splitLabelIntoTwoLines(item.name)
+              : null;
+            /** A capo = corpo ridotto, come `text-[10px]` vs `text-[11px]` a schermo. */
+            const nameFont = lines
+              ? baseNameFont * (LABEL_WRAP_FONT_SIZE / LABEL_FONT_SIZE)
+              : baseNameFont;
+            const dimensions = `${item.width}×${item.length}`;
+            const textMaxWidth = Math.max(4, item.width - 6);
+            /**
+             * Clip del collo nella scheda: il prefisso `print-` evita di
+             * collidere con il `clipPath` omonimo del canvas a schermo, che vive
+             * nello stesso documento (stesso accorgimento di `printNoteClipId`).
+             */
+            const clipId = `print-${clipIdForItem(item.id)}`;
+
+            /** Etichette interne secondo la densità scelta dall'operatore. */
+            const labels = (() => {
+              if (labelDensity === 'minimal') return null;
+
+              // Nome su due righe centrate: gli stessi `dy` del canvas e del PNG.
+              const wrappedName = lines && (
+                <text
+                  x={round(centerX)}
+                  y={round(centerY)}
+                  textAnchor="middle"
+                  fontFamily={FONT_FAMILY}
+                  fontSize={round(nameFont)}
+                  fontWeight="bold"
+                  fill={COLORS.name}
+                >
+                  <tspan x={round(centerX)} dy={-6}>
+                    {lines[0]}
+                  </tspan>
+                  <tspan x={round(centerX)} dy={13}>
+                    {lines[1]}
+                  </tspan>
+                </text>
+              );
+
+              if (labelDensity === 'client') {
+                // Solo nome: su due righe se il nome è composto, altrimenti troncato.
+                return (
+                  wrappedName || (
+                    <text
+                      x={round(centerX)}
+                      y={round(centerY + nameFont * 0.35)}
+                      textAnchor="middle"
+                      fontFamily={FONT_FAMILY}
+                      fontSize={round(nameFont)}
+                      fontWeight="bold"
+                      fill={COLORS.name}
+                    >
+                      {truncateToWidth(item.name, textMaxWidth, nameFont)}
+                    </text>
+                  )
+                );
+              }
+
+              if (labelDensity === 'dimensions') {
+                // Solo quota dimensionale, centrata nel collo.
+                return (
+                  <text
+                    x={round(centerX)}
+                    y={round(centerY + nameFont * 0.35)}
+                    textAnchor="middle"
+                    fontFamily={MONO_FONT_FAMILY}
+                    fontSize={round(isNarrow ? nameFont * 0.9 : nameFont)}
+                    fontWeight="bold"
+                    fill={COLORS.dimensions}
+                  >
+                    {dimensions}
+                  </text>
+                );
+              }
+
+              // Densità `all`: nome (su una o due righe) e quota subito sotto.
+              if (lines) {
+                return (
+                  <text
+                    x={round(centerX)}
+                    y={round(centerY)}
+                    textAnchor="middle"
+                    fontFamily={FONT_FAMILY}
+                    fontSize={round(nameFont)}
+                    fontWeight="bold"
+                    fill={COLORS.name}
+                  >
+                    <tspan x={round(centerX)} dy={-6}>
+                      {lines[0]}
+                    </tspan>
+                    <tspan x={round(centerX)} dy={13}>
+                      {lines[1]}
+                    </tspan>
+                    <tspan
+                      x={round(centerX)}
+                      dy={12}
+                      fontFamily={MONO_FONT_FAMILY}
+                      fontSize={round(dimFont)}
+                      fontWeight="normal"
+                      fill={COLORS.dimensions}
+                    >
+                      {dimensions}
+                    </tspan>
+                  </text>
+                );
+              }
+
+              return (
+                <>
+                  <text
+                    x={round(centerX)}
+                    y={round(centerY - dimFont * 0.6 + nameFont * 0.35)}
+                    textAnchor="middle"
+                    fontFamily={FONT_FAMILY}
+                    fontSize={round(nameFont)}
+                    fontWeight="bold"
+                    fill={COLORS.name}
+                  >
+                    {truncateToWidth(item.name, textMaxWidth, nameFont)}
+                  </text>
+                  <text
+                    x={round(centerX)}
+                    y={round(centerY + nameFont * 0.6 + dimFont * 0.35)}
+                    textAnchor="middle"
+                    fontFamily={MONO_FONT_FAMILY}
+                    fontSize={round(dimFont)}
+                    fill={COLORS.dimensions}
+                  >
+                    {dimensions}
+                  </text>
+                </>
+              );
+            })();
 
             return (
               <g key={item.id} transform={`translate(${round(item.x)}, ${round(item.y)})`}>
@@ -446,27 +607,12 @@ export const PrintReport: React.FC<PrintReportProps> = ({
                   stroke={item.borderColor}
                   strokeWidth={1.5}
                 />
-                <text
-                  x={round(centerX)}
-                  y={round(centerY - dimFont * 0.6 + nameFont * 0.35)}
-                  textAnchor="middle"
-                  fontFamily={FONT_FAMILY}
-                  fontSize={round(nameFont)}
-                  fontWeight="bold"
-                  fill={COLORS.name}
-                >
-                  {truncateToWidth(item.name, Math.max(4, item.width - 6), nameFont)}
-                </text>
-                <text
-                  x={round(centerX)}
-                  y={round(centerY + nameFont * 0.6 + dimFont * 0.35)}
-                  textAnchor="middle"
-                  fontFamily={MONO_FONT_FAMILY}
-                  fontSize={round(dimFont)}
-                  fill={COLORS.dimensions}
-                >
-                  {item.width}×{item.length}
-                </text>
+                <defs>
+                  <clipPath id={clipId}>
+                    <rect width={round(item.width)} height={round(item.length)} />
+                  </clipPath>
+                </defs>
+                <g clipPath={`url(#${clipId})`}>{labels}</g>
               </g>
             );
           })}
