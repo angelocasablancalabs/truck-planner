@@ -545,9 +545,9 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400 hover:bg-blue-50';
 
   return (
-    <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto [scrollbar-gutter:stable] space-y-6">
+    <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-4 overflow-y-auto [scrollbar-gutter:stable] space-y-3.5">
       {/* Header */}
-      <div className="border-b border-slate-200 pb-3">
+      <div className="border-b border-slate-200 pb-2">
         <h1 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2">
           <Truck className="w-6 h-6 text-blue-600" />
           TRUCK PLANNER
@@ -556,7 +556,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
       </div>
 
       {/* Barra comandi rapida: Copia Immagine (PNG) + Stampa / PDF */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-1.5">
         <button
           type="button"
           id="btn-copy-image"
@@ -584,7 +584,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
 
       {/* Backup, ripristino e condivisione del lavoro: salva il piano di carico
           in un file `.json` e riapre un piano salvato in precedenza. */}
-      <div className="grid grid-cols-2 gap-2 mt-2">
+      <div className="grid grid-cols-2 gap-1.5">
         <button
           type="button"
           id="btn-save-project"
@@ -630,20 +630,24 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         />
       </div>
 
-      {/* File attivo: nome del piano agganciato (Ctrl / Cmd + S lo riscrive in-place). */}
+      {/* File attivo: badge compatto e ben visibile subito sotto `Salva Piano` /
+          `Apri Piano`. Viene acceso sia all'apertura di un piano, sia dopo il
+          primo salvataggio — anche nel fallback di download classico, dove
+          `App.tsx` riporta il nome del file generato (`piano-<TARGA>-<data>.json`). */}
       {activeFileName !== null && (
         <div
-          id="active-file-name"
-          className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-1 truncate"
-          title={`File attivo: ${activeFileName}`}
+          id="active-file-badge"
+          className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono text-slate-700 truncate mt-1.5"
+          title={`File attualmente aperto: ${activeFileName}`}
         >
-          <span>📄</span>{' '}
-          <span className="font-semibold text-slate-700 truncate">{activeFileName}</span>
+          <span className="text-blue-600 flex-shrink-0">📄</span>
+          <span className="truncate font-semibold text-slate-800">{activeFileName}</span>
         </div>
       )}
 
-      {/* Selettore Mezzo */}
-      <div className="space-y-2">
+      {/* Configurazione Mezzo / Targa: blocco unico e compatto (space-y-1 fra
+          etichetta e input) per massimizzare la densità verticale. */}
+      <div className="space-y-1">
         <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
           Configurazione Mezzo
         </label>

@@ -876,14 +876,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     const width = Math.abs(endCm.x - start.x);
     const length = Math.abs(endCm.y - start.y);
 
-    const hits = items
+    const hitItemIds = items
       .filter((item) => isRectColliding(x, y, width, length, item))
       .map((item) => item.id);
 
-    if (hits.length === 0) return;
-
-    // Il lasso AGGIUNGE alla selezione corrente, senza duplicati.
-    onSelectItems(Array.from(new Set([...selectedItemIds, ...hits])));
+    // Selezione ESCLUSIVA: il lasso sostituisce integralmente la selezione
+    // corrente. Qualsiasi collo selezionato in precedenza e non intersecato dal
+    // rettangolo viene deselezionato all'istante (nessuna selezione cumulativa).
+    onSelectItems(hitItemIds);
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
