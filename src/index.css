@@ -1,10 +1,15 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   SPRINT D — OUTPUT: SCHEDA DI CARICO A4 / PDF
+   SPRINT D — OUTPUT: SCHEDA DI CARICO A4 / PDF  ("PIANO DI CARICO")
    --------------------------------------------------------------------------
    `#print-report` è montato nel DOM accanto all'app interattiva ma resta
    invisibile a schermo: esiste solo su carta.
+   La scheda è impaginata su **pagine A4 dinamiche** (sezione `.print-page`):
+     - carico compatto (≤ 3 righe)  → una sola pagina;
+     - carico articolato (≥ 4 righe) → Pagina 1 = intestazione + disegno,
+       Pagina 2 = header formale + tabella riepilogativa completa (salto
+       pagina forzato inline da `PrintReport.tsx`).
    ========================================================================== */
 
 #print-report {
@@ -34,21 +39,37 @@
     display: none !important;
   }
 
-  /* 2) Solo la scheda di carico resta visibile, a tutta pagina A4 portrait. */
+  /* 2) Solo la scheda di carico resta visibile, come sequenza di pagine A4:
+        il contenitore impila le pagine (`.print-page`), ciascuna alta quanto
+        l'area utile del foglio. */
   #print-report {
     display: flex !important;
     flex-direction: column;
-    gap: 3mm;
     width: 100%;
-    /* Altezza utile: A4 297mm − 2 × 10mm di margine di pagina. */
-    height: 277mm;
     color: #0f172a;
     font-family: Helvetica, Arial, sans-serif;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Il disegno assorbe tutto lo spazio residuo del foglio (centrato e scalato). */
+  /* Altezza utile di una pagina: A4 297mm − 2 × 10mm di margine di pagina. */
+  #print-report .print-page {
+    display: flex;
+    flex-direction: column;
+    gap: 3mm;
+    width: 100%;
+    height: 277mm;
+  }
+
+  /* La Pagina 2 (solo tabella) può eccedere l'altezza di un foglio: cresce
+     con il contenuto invece di comprimere le righe del riepilogo. */
+  #print-report .print-page-second {
+    height: auto;
+    min-height: 277mm;
+  }
+
+  /* Il disegno assorbe tutto lo spazio residuo del foglio (centrato e scalato):
+     in Pagina 1 con il carico articolato resta quindi a grandezza piena. */
   #print-report .print-drawing {
     flex: 1 1 auto;
     min-height: 0;
@@ -60,7 +81,7 @@
     height: 100%;
   }
 
-  /* La tabella riepilogo resta compatta in calce. */
+  /* La tabella riepilogo resta compatta in calce (o in cima alla Pagina 2). */
   #print-report .print-table {
     flex: 0 0 auto;
   }
