@@ -435,7 +435,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
         <header className="flex items-end justify-between border-b-2 border-slate-800 pb-1.5">
           <div>
             <h1 className="font-black text-2xl tracking-tight text-slate-900">PIANO DI CARICO</h1>
-            <p className="text-[8pt] text-slate-500">Truck Planner 2D — {generatedLabel}</p>
+            <p className="text-[8pt] text-slate-500">Truck Planner CAD — {generatedLabel}</p>
           </div>
           <div className="text-right leading-tight text-slate-700">
             <div className="text-[10pt] font-bold text-slate-900">{vehicleName}</div>

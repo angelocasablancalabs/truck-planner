@@ -371,7 +371,8 @@ const main = async () => {
 
     /* --- 4) Export PNG: stesso testo, senza bordo ------------------------- */
     const longExport = await cdp.eval(`
-      const mod = await import('/src/utils/export.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const mod = await import('/truck-planner/src/utils/export.ts');
       const vehicle = { id: 'bilico_cc', name: 'Bilico', width: 250, length: 1328 };
       const svg = mod.buildPianoSvg(vehicle, [], 'all', [], ${JSON.stringify(LONG_PLATE)}).svg;
       return {
@@ -394,7 +395,8 @@ const main = async () => {
     );
 
     const emptyExport = await cdp.eval(`
-      const mod = await import('/src/utils/export.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const mod = await import('/truck-planner/src/utils/export.ts');
       const vehicle = { id: 'bilico_cc', name: 'Bilico', width: 250, length: 1328 };
       const svg = mod.buildPianoSvg(vehicle, [], 'all', [], '   ').svg;
       return {
@@ -419,7 +421,8 @@ const main = async () => {
     `);
     await sleep(900);
     const liveExport = await cdp.eval(`
-      const mod = await import('/src/utils/export.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const mod = await import('/truck-planner/src/utils/export.ts');
       const vehicle = { id: 'bilico_cc', name: 'Bilico', width: 250, length: 1328 };
       const svg = mod.buildPianoSvg(vehicle, [], 'all', [], 'XA111NJ').svg;
       return {

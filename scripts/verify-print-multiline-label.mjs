@@ -256,7 +256,8 @@ const main = async () => {
 
     /* --- 1) Unit: helper condivisi di `labels.ts` ------------------------ */
     const unit = await cdp.eval(`
-      const labels = await import('/src/utils/labels.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const labels = await import('/truck-planner/src/utils/labels.ts');
       return {
         shouldWrap: labels.shouldWrapLabel(${JSON.stringify(COMPOSITE_NAME)}, 120),
         lines: labels.splitLabelIntoTwoLines(${JSON.stringify(COMPOSITE_NAME)}),

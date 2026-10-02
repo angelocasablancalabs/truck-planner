@@ -14,7 +14,7 @@ import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { PrintReport } from './components/PrintReport';
-import { exportProjectToJson } from './utils/fileStorage';
+import { isPickerAbortError, saveProjectWithHandle } from './utils/fileStorage';
 import {
   calculateSnapPosition,
   findSmartSpawnPosition,
@@ -32,6 +32,9 @@ const BATCH_DEFAULT_QUANTITY = 10;
 
 /** Numero massimo di fotogrammi conservati nella pila `past` (FIFO). */
 const HISTORY_LIMIT = 40;
+
+/** Durata (ms) del feedback verde `Salvato!` sul pulsante di salvataggio. */
+const SAVE_FEEDBACK_MS = 2000;
 
 /**
  * Copia profonda dello stato del piano: uno snapshot non condivide mai alcun
@@ -72,6 +75,35 @@ export default function App() {
   // Targa / identificativo del mezzo: campo libero (es. "XA000BB COME ARRIVA").
   // Alimenta il badge tecnico sopra la Cabina, lo snapshot PNG e la scheda A4.
   const [vehiclePlate, setVehiclePlate] = useState<string>('');
+
+  /* ------------------------------------------------------------------------ *
+   *  FILE ATTIVO — SALVATAGGIO DIRETTO IN-PLACE (STILE EXCEL / WORD)
+   *
+   *  `fileHandle` è l'handle del file su disco consegnato dalla File System
+   *  Access API (Chrome / Edge): finché resta agganciato, `Ctrl / Cmd + S`
+   *  **riscrive lo stesso file** senza passare dalla cartella Download.
+   *  `activeFileName` è il nome mostrato nella sidebar come "File attivo".
+   *
+   *  Sui browser senza File System Access API l'handle resta `null` e il
+   *  salvataggio ricade **trasparentemente** sul download classico: il nome
+   *  attivo viene comunque mostrato, così l'operatore sa su quale file lavora.
+   * ------------------------------------------------------------------------ */
+  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [activeFileName, setActiveFileName] = useState<string | null>(null);
+  /* Feedback `Salvato!` del pulsante della sidebar: vive qui — e non dentro
+     `ControlDeck` — perché il salvataggio parte da **due** strade, il click sul
+     pulsante e la scorciatoia `Ctrl / Cmd + S`: entrambe devono accendere lo
+     stesso feedback verde per 2 secondi. */
+  const [isProjectSaved, setIsProjectSaved] = useState<boolean>(false);
+  const [savedFileName, setSavedFileName] = useState<string | null>(null);
+  const saveFeedbackTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
+    },
+    []
+  );
 
   /* ------------------------------------------------------------------------ *
    *  MOTORE UNDO / REDO (CRONOLOGIA A SNAPSHOT)
@@ -402,28 +434,48 @@ export default function App() {
     setSelectedItemIds([]);
   }, [selectedItemIds, pushSnapshot, captureSnapshot]);
 
-  /** Svuotamento completo del pianale ("Svuota"): un solo passo di Undo. */
+  /**
+   * Svuotamento completo del pianale ("Svuota"): un solo passo di Undo.
+   *
+   * "Svuota" azzera il lavoro e avvia un piano nuovo: l'handle del file aperto
+   * viene **staccato** (e il nome attivo azzerato), così il primo `Ctrl / Cmd + S`
+   * del nuovo carico chiede un file nuovo invece di sovrascrivere il precedente.
+   */
   const handleClearAll = useCallback(() => {
     pushSnapshot(captureSnapshot());
     setItems([]);
     setSelectedItemIds([]);
+    setFileHandle(null);
+    setActiveFileName(null);
   }, [pushSnapshot, captureSnapshot]);
 
   /* ------------------------------------------------------------------------ *
    *  SALVA & APRI PIANO DI CARICO (.json)
    *
    *  Backup, ripristino e condivisione dei lavori: il piano di carico viene
-   *  serializzato in un file leggibile e riapribile in un secondo momento, anche
+   *  serializzato in un file leggibile e riaperto in un secondo momento, anche
    *  su un'altra macchina. È l'unica funzione che ricostruisce **tutto** lo
    *  stato logico della stiva in un colpo solo: mezzo, targa, colli, note
    *  laterali e densità etichette.
+   *
+   *  Con la File System Access API il file attivo resta **agganciato**: finché
+   *  l'handle è vivo, `Ctrl / Cmd + S` riscrive in-place lo stesso file (stile
+   *  Excel / Word) senza creare copie nella cartella Download.
    * ------------------------------------------------------------------------ */
 
   /**
-   * Raccoglie lo stato corrente nel formato ufficiale `ProjectFile` e ne innesca
-   * il download come file `.json` (nome derivato dalla targa del mezzo).
+   * Salva il piano di carico: **sovrascrittura diretta in-place** se c'è un file
+   * attivo (`Ctrl / Cmd + S` stile Excel / Word), altrimenti selettore nativo
+   * "Salva con nome" e — sui browser che non supportano la File System Access API
+   * o con permesso negato — download classico `.json` (fallback trasparente).
+   *
+   * Restituisce il nome del file salvato (per il feedback `Salvato!` della
+   * sidebar) oppure `null` se l'operatore ha annullato il selettore.
    */
-  const handleSaveProject = useCallback(() => {
+  const handleSaveProject = useCallback(async (): Promise<{
+    fileName: string;
+    isNewFile: boolean;
+  } | null> => {
     const project: ProjectFile = {
       version: 1,
       app: 'truck-planner',
@@ -435,8 +487,34 @@ export default function App() {
       labelDensity,
     };
 
-    exportProjectToJson(project);
-  }, [vehicle, vehiclePlate, items, notes, labelDensity]);
+    try {
+      const result = await saveProjectWithHandle(project, fileHandle);
+      // Il file attivo segue sempre l'esito reale del salvataggio: dopo una
+      // sovrascrittura l'handle è lo stesso, dopo un "Salva con nome" è il nuovo.
+      setFileHandle(result.handle);
+      setActiveFileName(result.fileName);
+
+      // Feedback verde `Salvato!` per 2 secondi, con il nome del file nel tooltip:
+      // identico sia per il click sul pulsante sia per `Ctrl / Cmd + S`.
+      setSavedFileName(result.fileName);
+      setIsProjectSaved(true);
+      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
+      saveFeedbackTimer.current = window.setTimeout(
+        () => setIsProjectSaved(false),
+        SAVE_FEEDBACK_MS
+      );
+
+      return { fileName: result.fileName, isNewFile: result.isNewFile };
+    } catch (error) {
+      // Annullamento volontario del selettore: nessun avviso, nessun salvataggio.
+      if (isPickerAbortError(error)) return null;
+
+      const message =
+        error instanceof Error ? error.message : 'Impossibile salvare il piano di carico.';
+      window.alert(`Salvataggio del piano non riuscito.\n\n${message}`);
+      return null;
+    }
+  }, [vehicle, vehiclePlate, items, notes, labelDensity, fileHandle]);
 
   /**
    * Apre un piano di carico salvato in precedenza e lo mette in scena.
@@ -446,9 +524,13 @@ export default function App() {
    * precedente (colli, note e — come per ogni Undo — la selezione ripulita).
    * La lista dei colli e quella delle note vengono copiate in profondità, così
    * il file appena letto non condivide riferimenti con lo stato vivo.
+   *
+   * `handle` è l'handle della File System Access API (o `null` col selettore
+   * classico) e `fileName` il nome mostrato come "File attivo": da qui in avanti
+   * `Ctrl / Cmd + S` riscrive **quel** file.
    */
   const handleLoadProject = useCallback(
-    (project: ProjectFile) => {
+    (project: ProjectFile, handle: FileSystemFileHandle | null, fileName: string) => {
       // Fotogramma PRIMA del ripristino: l'apertura è un passo di Undo.
       pushSnapshot(captureSnapshot());
 
@@ -457,6 +539,10 @@ export default function App() {
       setItems(project.items.map((item) => ({ ...item })));
       setNotes((project.notes ?? []).map((note) => ({ ...note })));
       setLabelDensity(project.labelDensity ?? 'all');
+
+      // Il file attivo diventa quello appena aperto (handle compreso).
+      setFileHandle(handle);
+      setActiveFileName(fileName || null);
 
       // Nessuna selezione orfana: le selezioni correnti vengono azzerate.
       setSelectedItemIds([]);
@@ -557,9 +643,21 @@ export default function App() {
     []
   );
 
-  // Gestione scorciatoie da tastiera (Spazio, Canc e Undo / Redo)
+  // Gestione scorciatoie da tastiera (Ctrl/Cmd+S, Spazio, Canc e Undo / Redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+
+      // Salvataggio diretto — `Ctrl / Cmd + S` riscrive il file attivo in-place
+      // (stile Excel / Word) e **previene sempre** il salvataggio pagina del
+      // browser. È gestito prima delle guardie sui campi di scrittura perché non
+      // è una scorciatoia di editing: deve funzionare anche mentre si digita.
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
+        e.preventDefault();
+        void handleSaveProject();
+        return;
+      }
+
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
         return; // Non intercettare se si sta scrivendo in un input
       }
@@ -567,8 +665,6 @@ export default function App() {
       if (e.target instanceof HTMLTextAreaElement) {
         return;
       }
-
-      const key = e.key.toLowerCase();
 
       // Undo / Redo — `Ctrl / Cmd + Z` annulla, `Ctrl / Cmd + Shift + Z` e
       // `Ctrl / Cmd + Y` ripristinano. Nei campi di testo il browser conserva il
@@ -611,6 +707,7 @@ export default function App() {
     handleDeleteNote,
     handleUndo,
     handleRedo,
+    handleSaveProject,
     selectedNoteId,
     selectedItemIds,
   ]);
@@ -657,6 +754,9 @@ export default function App() {
             onUpdatePlate={setVehiclePlate}
             onSaveProject={handleSaveProject}
             onLoadProject={handleLoadProject}
+            activeFileName={activeFileName}
+            isProjectSaved={isProjectSaved}
+            savedFileName={savedFileName}
             onAddItem={handleAddItem}
             onRotateSelected={handleRotateSelected}
             onDeleteSelected={handleDeleteSelected}

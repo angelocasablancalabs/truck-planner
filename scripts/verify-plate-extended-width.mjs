@@ -201,7 +201,8 @@ const main = async () => {
 
     /* --- 1) Unit: formula e ingombro della targa estesa ------------------ */
     const unit = await cdp.eval(`
-      const mod = await import('/src/utils/plateBadge.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const mod = await import('/truck-planner/src/utils/plateBadge.ts');
       const layout = mod.plateBadgeLayout(250, ${JSON.stringify(PLATE_19)});
       const max40 = mod.plateBadgeLayout(250, ${JSON.stringify(PLATE_40)});
       return {
@@ -303,7 +304,8 @@ const main = async () => {
 
     /* --- 3) SVG esportato: viewBox che contiene davvero il testo --------- */
     const exported = await cdp.eval(`
-      const mod = await import('/src/utils/export.ts');
+      // Il dev server serve l'app sotto la base Vite (/truck-planner/).
+      const mod = await import('/truck-planner/src/utils/export.ts');
       const vehicle = ${JSON.stringify(VEHICLE)};
       const snapshot = mod.buildPianoSvg(vehicle, [], 'all', [], ${JSON.stringify(PLATE_19)});
       // Il bounding box REALE del glifo si misura montando l'SVG fuori schermo.

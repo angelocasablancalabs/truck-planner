@@ -30,7 +30,12 @@ import {
   resolveNoteFontSize,
 } from '../utils/sideNotes';
 import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
-import { parseProjectFile } from '../utils/fileStorage';
+import {
+  isOpenPickerSupported,
+  isPickerAbortError,
+  openProjectWithPicker,
+  parseProjectFile,
+} from '../utils/fileStorage';
 import {
   Truck,
   RotateCw,
@@ -56,9 +61,6 @@ type CopyFeedback = 'idle' | 'copied' | 'downloaded';
 
 /** Durata (ms) del feedback verde "Copiato!" sul pulsante di esportazione. */
 const COPY_FEEDBACK_MS = 2500;
-
-/** Durata (ms) del feedback verde "Salvato!" sul pulsante di salvataggio piano. */
-const SAVE_FEEDBACK_MS = 2000;
 
 /**
  * Caricamento a lotti dall'accordion multifunzione: quantità predefinita,
@@ -113,11 +115,30 @@ interface ControlDeckProps {
   onUpdatePlate: (value: string) => void;
   /**
    * Salva & Apri Piano (.json): il file di progetto viene costruito da `App.tsx`
-   * (unica fonte dello stato) e ricaricato con la stessa callback, che registra
-   * anche il passo di Undo necessario ad annullare un'apertura involontaria.
+   * (unica fonte dello stato) e ricaricato con la stessa callback.
+   *
+   * `onSaveProject` risolve con il nome del file salvato (per il feedback
+   * `Salvato!` e il tooltip del pulsante) oppure con `null` se il salvataggio è
+   * stato annullato dal selettore nativo o è fallito.
+   * `onLoadProject` riceve anche l'**handle** della File System Access API (o
+   * `null` col selettore classico) e il nome del file: da lì in avanti
+   * `Ctrl / Cmd + S` riscrive in-place quel file.
    */
-  onSaveProject: () => void;
-  onLoadProject: (project: ProjectFile) => void;
+  onSaveProject: () => Promise<{ fileName: string; isNewFile: boolean } | null>;
+  onLoadProject: (
+    project: ProjectFile,
+    handle: FileSystemFileHandle | null,
+    fileName: string
+  ) => void;
+  /** Nome del file attivo mostrato in sidebar (`null` = nessun file agganciato). */
+  activeFileName: string | null;
+  /**
+   * Feedback `Salvato!` (acceso per 2 s dal motore di `App.tsx`, perché il
+   * salvataggio arriva sia dal pulsante sia dalla scorciatoia `Ctrl / Cmd + S`)
+   * e nome dell'ultimo file salvato, mostrato nel tooltip del pulsante.
+   */
+  isProjectSaved: boolean;
+  savedFileName: string | null;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
   onRotateSelected: () => void;
   onDeleteSelected: () => void;
@@ -180,6 +201,9 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onUpdatePlate,
   onSaveProject,
   onLoadProject,
+  activeFileName,
+  isProjectSaved,
+  savedFileName,
   onAddItem,
   onRotateSelected,
   onDeleteSelected,
@@ -223,40 +247,57 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   const copyFeedbackTimer = useRef<number | null>(null);
 
   /* --- Salva & Apri Piano (.json) ----------------------------------------- */
-  // Feedback verde "Salvato!" sul pulsante di salvataggio (2 secondi).
-  const [isProjectSaved, setIsProjectSaved] = useState<boolean>(false);
-  const saveFeedbackTimer = useRef<number | null>(null);
-  // Selettore file nativo del sistema operativo: aperto dal pulsante "Apri Piano".
+  // Selettore file classico (fallback sui browser senza File System Access API):
+  // aperto dal pulsante "Apri Piano".
   const projectInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(
     () => () => {
       if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
-      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
     },
     []
   );
 
-  /** Salva il piano di carico come file `.json` e mostra il feedback "Salvato!". */
+  /** Salva il piano di carico: il feedback `Salvato!` è acceso da `App.tsx`. */
   const handleSaveProject = () => {
-    onSaveProject();
-    setIsProjectSaved(true);
-    if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
-    saveFeedbackTimer.current = window.setTimeout(
-      () => setIsProjectSaved(false),
-      SAVE_FEEDBACK_MS
-    );
-  };
-
-  /** Apre il selettore file nativo del sistema operativo. */
-  const handleOpenProjectPicker = () => {
-    projectInputRef.current?.click();
+    void onSaveProject();
   };
 
   /**
-   * Ripristina il piano di carico scelto: il file viene convalidato da
-   * `parseProjectFile` e, in caso di file corrotto o di formato estraneo,
-   * l'operatore riceve un avviso chiaro senza che lo stato in scena cambi.
+   * Apre un piano di carico.
+   *
+   * Con la File System Access API (Chrome / Edge) si usa il selettore nativo
+   * `showOpenFilePicker`, che restituisce anche l'**handle** del file: è ciò che
+   * abilita il salvataggio in-place successivo. Sui browser che non la supportano
+   * si ricade **trasparentemente** sul selettore file classico (`<input type="file">`).
+   * Se l'operatore annulla la finestra nativa (`AbortError`) non succede nulla.
+   */
+  const handleOpenProjectPicker = async () => {
+    if (!isOpenPickerSupported()) {
+      // Fallback trasparente: selettore file classico del sistema operativo.
+      projectInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const opened = await openProjectWithPicker();
+      onLoadProject(opened.project, opened.handle, opened.fileName);
+    } catch (error) {
+      // Annullamento volontario del selettore: esce silenziosamente.
+      if (isPickerAbortError(error)) return;
+
+      const message =
+        error instanceof Error ? error.message : 'Impossibile aprire il piano di carico selezionato.';
+      window.alert(`Apertura del piano non riuscita.\n\n${message}`);
+    }
+  };
+
+  /**
+   * Ripristina il piano di carico scelto dal **selettore classico** (browser
+   * senza File System Access API): il file viene convalidato da `parseProjectFile`
+   * e, in caso di file corrotto o di formato estraneo, l'operatore riceve un
+   * avviso chiaro senza che lo stato in scena cambi. Senza handle nativo il
+   * salvataggio successivo resta quello del download classico.
    */
   const handleProjectFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -266,7 +307,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
 
     try {
       const project = await parseProjectFile(file);
-      onLoadProject(project);
+      onLoadProject(project, null, file.name);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Impossibile aprire il piano di carico selezionato.';
@@ -511,7 +552,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           <Truck className="w-6 h-6 text-blue-600" />
           TRUCK PLANNER
         </h1>
-        <p className="text-xs text-slate-500 font-medium">Gestione Carico 2D Vettoriale</p>
+        <p className="text-xs text-slate-500 font-medium">Gestione Carico CAD Vettoriale</p>
       </div>
 
       {/* Barra comandi rapida: Copia Immagine (PNG) + Stampa / PDF */}
@@ -549,7 +590,11 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           id="btn-save-project"
           onClick={handleSaveProject}
           aria-live="polite"
-          title="Salva il piano di carico in un file .json (backup, condivisione, riapertura)"
+          title={
+            isProjectSaved && savedFileName
+              ? `File salvato: ${savedFileName}`
+              : 'Salva modifiche (Ctrl / Cmd + S)'
+          }
           className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-1.5 px-2 rounded flex items-center justify-center gap-1.5 transition cursor-pointer"
         >
           <Download className="w-3.5 h-3.5 shrink-0" />
@@ -573,8 +618,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           <span className="text-xs font-semibold text-slate-800 truncate">Apri Piano</span>
         </button>
 
-        {/* Selettore file nativo del sistema operativo, invisibile: pilotato dal
-            pulsante "Apri Piano" e convalidato da `parseProjectFile`. */}
+        {/* Selettore file classico, invisibile: usato come **fallback trasparente**
+            sui browser senza File System Access API, convalidato da `parseProjectFile`. */}
         <input
           ref={projectInputRef}
           id="project-file-input"
@@ -584,6 +629,18 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           className="hidden"
         />
       </div>
+
+      {/* File attivo: nome del piano agganciato (Ctrl / Cmd + S lo riscrive in-place). */}
+      {activeFileName !== null && (
+        <div
+          id="active-file-name"
+          className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-1 truncate"
+          title={`File attivo: ${activeFileName}`}
+        >
+          <span>📄</span>{' '}
+          <span className="font-semibold text-slate-700 truncate">{activeFileName}</span>
+        </div>
+      )}
 
       {/* Selettore Mezzo */}
       <div className="space-y-2">
@@ -1345,6 +1402,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Ruota 90°</span>
               <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Spazio</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Salva Piano (in-place)</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Ctrl / Cmd + S</kbd>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Elimina collo / nota</span>

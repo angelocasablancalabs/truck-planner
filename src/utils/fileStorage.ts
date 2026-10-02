@@ -8,7 +8,8 @@
  *  passarlo a un collega sul piazzale.
  *
  *  Il modulo è **puro e senza dipendenze React**: si occupa solo di costruire,
- *  scaricare e convalidare i file. Lo stato applicativo resta in `App.tsx`.
+ *  scrivere, scaricare e convalidare i file. Lo stato applicativo resta in
+ *  `App.tsx`.
  *
  *  Regole di formato (`ProjectFile` in `types.ts`):
  *    - `version: 1` + `app: 'truck-planner'` → firma dello schema;
@@ -16,6 +17,15 @@
  *    - nomi file leggibili e "sporco-free": la targa viene ripulita da ogni
  *      carattere non alfanumerico, così il file si apre senza sorprese su
  *      Windows, macOS e sui client di posta.
+ *
+ *  DUE MODALITÀ DI SALVATAGGIO (`saveProjectWithHandle`):
+ *    1. **File System Access API** (Chrome / Edge su Windows e macOS): il modulo
+ *       conserva l'handle del file aperto e lo **riscrive in-place** con
+ *       `handle.createWritable()` — il classico `Ctrl / Cmd + S` di Excel e Word,
+ *       senza passare dalla cartella Download e senza duplicati `(1)`, `(2)`.
+ *    2. **Fallback trasparente**: se il browser non espone i selettori nativi, o
+ *       se l'operatore nega l'accesso al file, si ricade sul download classico
+ *       con tag `<a download>` (`exportProjectToJson`), esattamente come prima.
  * -------------------------------------------------------------------------- */
 
 import type { SideNote, PlacedItem, ProjectFile } from '../types';
@@ -31,6 +41,81 @@ const FILE_EXTENSION = 'json';
 const JSON_MIME_TYPE = 'application/json';
 /** Indentazione del `JSON.stringify`: file ispezionabile e diffabile a mano. */
 const JSON_INDENT = 2;
+
+/* -------------------------------------------------------------------------- *
+ *  FILE SYSTEM ACCESS API — TIPI E SUPPORTO NATIVO
+ *
+ *  I selettori nativi (`showOpenFilePicker` / `showSaveFilePicker`) non sono
+ *  (ancora) dichiarati in `lib.dom.d.ts`: le interfacce minime necessarie sono
+ *  quindi dichiarate qui e `window` viene letto attraverso una vista tipizzata,
+ *  senza allargare il tipo globale del progetto.
+ * -------------------------------------------------------------------------- */
+
+/** Voce di `types` dei selettori: descrizione leggibile + MIME → estensioni. */
+export interface FilePickerAcceptType {
+  description?: string;
+  accept: Record<string, string[]>;
+}
+
+/** Opzioni comuni ai due selettori nativi. */
+interface FilePickerOptions {
+  types?: FilePickerAcceptType[];
+  excludeAcceptAllOption?: boolean;
+  id?: string;
+}
+
+/** Opzioni di `showOpenFilePicker` (selezione multipla disattivata). */
+interface OpenFilePickerOptions extends FilePickerOptions {
+  multiple?: boolean;
+}
+
+/** Opzioni di `showSaveFilePicker` (nome proposto per il nuovo file). */
+interface SaveFilePickerOptions extends FilePickerOptions {
+  suggestedName?: string;
+}
+
+/** Vista tipizzata di `window` con i due selettori della File System Access API. */
+interface FileSystemAccessWindow extends Window {
+  showOpenFilePicker?: (options?: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
+  showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
+}
+
+/** Filtro ufficiale dei file di progetto, condiviso da apertura e salvataggio. */
+export const PROJECT_FILE_PICKER_TYPES: FilePickerAcceptType[] = [
+  {
+    description: 'File Truck Planner CAD (.json)',
+    accept: { [JSON_MIME_TYPE]: [`.${FILE_EXTENSION}`] },
+  },
+];
+
+/** `window` visto come contenitore dei selettori nativi (mai `null` nel browser). */
+const pickerWindow = (): FileSystemAccessWindow => window as FileSystemAccessWindow;
+
+/** Vero se il browser espone il selettore nativo di **apertura**. */
+export const isOpenPickerSupported = (): boolean =>
+  typeof pickerWindow().showOpenFilePicker === 'function';
+
+/** Vero se il browser espone il selettore nativo di **salvataggio**. */
+export const isSavePickerSupported = (): boolean =>
+  typeof pickerWindow().showSaveFilePicker === 'function';
+
+/**
+ * Vero se il browser supporta **entrambi** i selettori della File System Access
+ * API (Chrome / Edge su Windows e macOS): solo in questo caso ha senso parlare di
+ * salvataggio in-place. Altrove il modulo ricade automaticamente sul download.
+ */
+export const isFileSystemAccessSupported = (): boolean =>
+  isOpenPickerSupported() && isSavePickerSupported();
+
+/**
+ * Vero se l'errore è l'**annullamento volontario** di un selettore nativo
+ * (`AbortError`): l'operatore ha chiuso la finestra di dialogo, quindi non va
+ * mostrato alcun avviso e nessun download deve partire.
+ */
+export const isPickerAbortError = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  (error as { name?: unknown }).name === 'AbortError';
 
 /**
  * Campo obbligatorio mancante o di tipo sbagliato nel file di progetto: errore
@@ -223,4 +308,126 @@ export const parseProjectFile = async (file: File): Promise<ProjectFile> => {
   }
 
   return validateProject(parsed);
+};
+
+/* -------------------------------------------------------------------------- *
+ *  SALVATAGGIO DIRETTO IN-PLACE (STILE EXCEL) & APERTURA CON HANDLE
+ * -------------------------------------------------------------------------- */
+
+/** Esito di un salvataggio: handle attivo, nome del file e natura dell'operazione. */
+export interface SaveProjectResult {
+  /** Handle del file su disco (`null` quando si è passati dal download classico). */
+  handle: FileSystemFileHandle | null;
+  /** Nome del file salvato (`piano-<TARGA>_<YYYY-MM-DD>.json`). */
+  fileName: string;
+  /** `true` se il file è stato creato ora, `false` se è stata una sovrascrittura. */
+  isNewFile: boolean;
+}
+
+/** Esito di un'apertura: piano convalidato, handle del file e nome. */
+export interface OpenProjectResult {
+  /** Piano di carico convalidato e pronto per essere messo in scena. */
+  project: ProjectFile;
+  /** Handle del file (`null` quando si è passati dal selettore classico). */
+  handle: FileSystemFileHandle | null;
+  /** Nome del file aperto (mostrato come "File attivo" nella sidebar). */
+  fileName: string;
+}
+
+/**
+ * Scrive il JSON del piano dentro un handle della File System Access API.
+ * Un solo punto di scrittura condiviso da sovrascrittura e "Salva con nome".
+ */
+const writeProjectToHandle = async (
+  handle: FileSystemFileHandle,
+  json: string
+): Promise<void> => {
+  const writable = await handle.createWritable();
+  await writable.write(json);
+  await writable.close();
+};
+
+/**
+ * Salva il piano di carico con salvataggio **diretto in-place** stile Excel/Word.
+ *
+ *  - **`existingHandle` presente** → il file già aperto viene **riscritto** con
+ *    `handle.createWritable()`: nessun download, nessun duplicato nella cartella
+ *    Download, nome del file invariato. È il percorso di `Ctrl / Cmd + S`.
+ *  - **`existingHandle` assente (file nuovo)** → se il browser supporta la File
+ *    System Access API si apre il selettore nativo `showSaveFilePicker`
+ *    (nome proposto: `piano-<TARGA>_<YYYY-MM-DD>.json`) e si scrive lì.
+ *  - **Fallback trasparente** → browser senza selettori nativi o permesso negato:
+ *    si scarica il file con il tag `<a download>` (`exportProjectToJson`).
+ *
+ * @throws l'`AbortError` del selettore quando l'operatore annulla la finestra:
+ *         il chiamante lo riconosce con `isPickerAbortError` e tace.
+ */
+export const saveProjectWithHandle = async (
+  project: ProjectFile,
+  existingHandle?: FileSystemFileHandle | null
+): Promise<SaveProjectResult> => {
+  const json = JSON.stringify(project, null, JSON_INDENT);
+  const defaultName = buildProjectFileName(project.plate ?? '');
+
+  // 1) SOVRASCRITTURA IN-PLACE: il file già aperto viene riscritto sul posto.
+  if (existingHandle) {
+    await writeProjectToHandle(existingHandle, json);
+    return { handle: existingHandle, fileName: existingHandle.name, isNewFile: false };
+  }
+
+  // 2) FILE NUOVO: selettore nativo "Salva con nome", quando disponibile.
+  const savePicker = pickerWindow().showSaveFilePicker;
+  if (typeof savePicker === 'function') {
+    try {
+      const handle = await savePicker.call(pickerWindow(), {
+        suggestedName: defaultName,
+        types: PROJECT_FILE_PICKER_TYPES,
+      });
+      await writeProjectToHandle(handle, json);
+      return { handle, fileName: handle.name, isNewFile: true };
+    } catch (error) {
+      // Annullamento volontario: nessun file e nessun download, esce silenziosamente.
+      if (isPickerAbortError(error)) throw error;
+      // Permesso negato o selettore non utilizzabile in questo contesto:
+      // si prosegue con il fallback trasparente qui sotto.
+    }
+  }
+
+  // 3) FALLBACK TRASPARENTE: download classico nella cartella Download.
+  exportProjectToJson(project);
+  return { handle: null, fileName: defaultName, isNewFile: true };
+};
+
+/**
+ * Apre un piano di carico con il selettore nativo della File System Access API e
+ * ne restituisce anche l'**handle**, che da quel momento abilita il salvataggio
+ * in-place. Se l'operatore annulla la finestra l'`AbortError` risale al
+ * chiamante, che esce in silenzio (`isPickerAbortError`).
+ *
+ * Da invocare solo quando `isOpenPickerSupported()` è vero: altrove il chiamante
+ * usa il selettore file classico (`<input type="file">`).
+ *
+ * @throws {ProjectFileError} se il file scelto non è un piano di carico valido.
+ */
+export const openProjectWithPicker = async (): Promise<OpenProjectResult> => {
+  const openPicker = pickerWindow().showOpenFilePicker;
+  if (typeof openPicker !== 'function') {
+    throw new ProjectFileError(
+      'Questo browser non supporta l\'apertura diretta dei file: usa il selettore classico.'
+    );
+  }
+
+  const [handle] = await openPicker.call(pickerWindow(), {
+    types: PROJECT_FILE_PICKER_TYPES,
+    multiple: false,
+  });
+
+  if (!handle) {
+    throw new ProjectFileError('Nessun file selezionato.');
+  }
+
+  const file = await handle.getFile();
+  const project = await parseProjectFile(file);
+
+  return { project, handle, fileName: handle.name };
 };

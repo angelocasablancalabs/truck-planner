@@ -415,6 +415,27 @@ const main = async () => {
       'mount della barra comandi'
     );
 
+    /*
+     * Chrome headless *espone* la File System Access API ma non può mostrare le
+     * finestre di dialogo native: `showSaveFilePicker` / `showOpenFilePicker`
+     * restano appesi per sempre. Questa suite storica verifica il **fallback
+     * trasparente** (download `<a download>` + `<input type="file">` classico),
+     * cioè il comportamento dei browser senza File System Access API: l'API
+     * viene quindi spenta nella pagina con `Object.defineProperty`, esattamente
+     * come se il browser non la supportasse. Il percorso nativo — sovrascrittura
+     * in-place e selettore di salvataggio — è verificato in
+     * `scripts/verify-inplace-save.mjs`, con handle e selettori controllabili.
+     */
+    await cdp.eval(`
+      Object.defineProperty(window, 'showSaveFilePicker', {
+        configurable: true, writable: true, value: undefined,
+      });
+      Object.defineProperty(window, 'showOpenFilePicker', {
+        configurable: true, writable: true, value: undefined,
+      });
+      return 1;
+    `);
+
     /* --- 0) Presenza dei nuovi comandi in sidebar ------------------------ */
     const commands = await cdp.eval(`
       const save = document.getElementById('btn-save-project');

@@ -4,7 +4,7 @@
  *  Controlla la nuova impaginazione della scheda di stampa (`PrintReport.tsx`):
  *
  *    1. Intestazione minimale: titolo ufficiale `PIANO DI CARICO` (font-black
- *       text-2xl tracking-tight), sottotitolo `Truck Planner 2D — data • ora`
+ *       text-2xl tracking-tight), sottotitolo `Truck Planner CAD — data • ora`
  *       (nessuna dicitura "documento generato il"), blocco mezzo a destra con
  *       nome vettore in grassetto e dimensioni in metri **larghezza per prima**
  *       (`2.50 × 13.28 m`), **nessuna riga Targa**.
@@ -306,8 +306,8 @@ const main = async () => {
       `class="${header.titleClass}" peso=${header.titleFontWeight} corpo=${header.titleFontSize}`
     );
     check(
-      'Sottotitolo "Truck Planner 2D — data • ora" senza "documento generato il"',
-      /^Truck Planner 2D — \d{2}\/\d{2}\/\d{4} • \d{2}:\d{2}$/.test(header.subtitle) &&
+      'Sottotitolo "Truck Planner CAD — data • ora" senza "documento generato il"',
+      /^Truck Planner CAD — \d{2}\/\d{2}\/\d{4} • \d{2}:\d{2}$/.test(header.subtitle) &&
         !header.subtitle.includes('documento generato il') &&
         !header.reportText.includes('documento generato il'),
       `sottotitolo = "${header.subtitle}"`
