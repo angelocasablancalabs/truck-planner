@@ -88,17 +88,57 @@ export interface SideNote {
 /**
  * Fotogramma della cronologia Undo / Redo (snapshot engine).
  *
- * Contiene **solo lo stato della stiva** — i colli e le note laterali — che è
- * l'unico dato su cui l'operatore agisce in modo distruttivo. Selezione, vista e
- * densità etichette sono stati di interfaccia e restano fuori dalla cronologia.
+ * Contiene **tutto lo stato logico del piano di carico** — colli, note laterali,
+ * configurazione del mezzo, targa e densità etichette — cioè esattamente ciò che
+ * viene salvato nel file di progetto (`ProjectFile`). Così ogni azione è
+ * realmente annullabile, compresa l'**apertura di un piano salvato**, che cambia
+ * in un colpo solo mezzo, targa, colli, note e densità: un `Ctrl / Cmd + Z`
+ * riporta in scena il lavoro precedente senza residui.
  *
- * Le due liste sono sempre **copie profonde**: uno snapshot non condivide alcun
- * riferimento con lo stato vivo, quindi non può essere corrotto da mutazioni
- * successive.
+ * Selezione, zoom e pan restano invece stati di interfaccia e non entrano nella
+ * cronologia. I due elenchi sono sempre **copie profonde**: uno snapshot non
+ * condivide alcun riferimento con lo stato vivo, quindi non può essere corrotto
+ * da mutazioni successive.
  */
 export interface HistorySnapshot {
   items: PlacedItem[];
   notes: SideNote[];
+  /** Configurazione del mezzo al momento del fotogramma. */
+  vehicle: VehicleConfig;
+  /** Targa / identificativo del mezzo al momento del fotogramma. */
+  plate: string;
+  /** Densità etichette attiva al momento del fotogramma. */
+  labelDensity: LabelDensity;
+}
+
+/**
+ * Struttura ufficiale del file di progetto (`.json`).
+ *
+ * È il formato di **salvataggio, backup, ripristino e condivisione** di un
+ * lavoro completo: contiene l'intero stato logico del piano di carico — mezzo,
+ * targa, colli, note laterali e densità etichette — e nulla di effimero
+ * (selezione, zoom e pan restano stati di interfaccia e non vengono esportati).
+ *
+ * `version` e `app` sono la firma del formato: permettono di riconoscere un
+ * file di Truck Planner e di gestirne in futuro l'evoluzione senza ambiguità.
+ */
+export interface ProjectFile {
+  /** Versione dello schema del file (attualmente l'unica: `1`). */
+  version: 1;
+  /** Firma dell'applicazione che ha prodotto il file. */
+  app: 'truck-planner';
+  /** Data e ora ISO 8601 del salvataggio. */
+  timestamp: string;
+  /** Configurazione del mezzo (preset o dimensioni personalizzate). */
+  vehicle: VehicleConfig;
+  /** Targa / identificativo del mezzo (stringa vuota se non compilata). */
+  plate: string;
+  /** Colli posizionati sul pianale, con coordinate e tinte. */
+  items: PlacedItem[];
+  /** Note laterali di carico posizionate in 2D attorno al pianale. */
+  notes: SideNote[];
+  /** Densità delle etichette attiva al momento del salvataggio. */
+  labelDensity: LabelDensity;
 }
 
 /** Variante di caricamento scelta in console (Punta / Piatto / Sfuso). */

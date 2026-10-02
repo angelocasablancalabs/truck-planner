@@ -4,6 +4,13 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  /**
+   * GitHub Pages serve il sito da una sottocartella (project page) e non dalla
+   * radice del dominio: senza `base` tutti gli asset verrebbero richiesti a
+   * `/assets/...` e la pagina pubblicata risulterebbe bianca (404 su JS e CSS).
+   * Il valore deve restare allineato al nome del repository.
+   */
+  base: '/truck-planner/',
   plugins: [
     react(),
     tailwindcss()

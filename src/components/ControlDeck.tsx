@@ -6,6 +6,7 @@ import type {
   AddItemOptions,
   LabelDensity,
   SideNote,
+  ProjectFile,
 } from '../types';
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '../constants';
 import type { ColorFamily } from '../constants';
@@ -28,7 +29,8 @@ import {
   noteGeometry,
   resolveNoteFontSize,
 } from '../utils/sideNotes';
-import { PLATE_INPUT_ID } from '../utils/plateBadge';
+import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
+import { parseProjectFile } from '../utils/fileStorage';
 import {
   Truck,
   RotateCw,
@@ -43,6 +45,7 @@ import {
   Check,
   Printer,
   Download,
+  FolderOpen,
   FileText,
   Undo2,
   Redo2,
@@ -53,6 +56,9 @@ type CopyFeedback = 'idle' | 'copied' | 'downloaded';
 
 /** Durata (ms) del feedback verde "Copiato!" sul pulsante di esportazione. */
 const COPY_FEEDBACK_MS = 2500;
+
+/** Durata (ms) del feedback verde "Salvato!" sul pulsante di salvataggio piano. */
+const SAVE_FEEDBACK_MS = 2000;
 
 /**
  * Caricamento a lotti dall'accordion multifunzione: quantità predefinita,
@@ -105,6 +111,13 @@ interface ControlDeckProps {
    */
   plate: string;
   onUpdatePlate: (value: string) => void;
+  /**
+   * Salva & Apri Piano (.json): il file di progetto viene costruito da `App.tsx`
+   * (unica fonte dello stato) e ricaricato con la stessa callback, che registra
+   * anche il passo di Undo necessario ad annullare un'apertura involontaria.
+   */
+  onSaveProject: () => void;
+  onLoadProject: (project: ProjectFile) => void;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
   onRotateSelected: () => void;
   onDeleteSelected: () => void;
@@ -165,6 +178,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onSelectVehicle,
   plate,
   onUpdatePlate,
+  onSaveProject,
+  onLoadProject,
   onAddItem,
   onRotateSelected,
   onDeleteSelected,
@@ -207,12 +222,57 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   // Timer di reset del feedback: si spegne da solo dopo 2,5 secondi.
   const copyFeedbackTimer = useRef<number | null>(null);
 
+  /* --- Salva & Apri Piano (.json) ----------------------------------------- */
+  // Feedback verde "Salvato!" sul pulsante di salvataggio (2 secondi).
+  const [isProjectSaved, setIsProjectSaved] = useState<boolean>(false);
+  const saveFeedbackTimer = useRef<number | null>(null);
+  // Selettore file nativo del sistema operativo: aperto dal pulsante "Apri Piano".
+  const projectInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(
     () => () => {
       if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
     },
     []
   );
+
+  /** Salva il piano di carico come file `.json` e mostra il feedback "Salvato!". */
+  const handleSaveProject = () => {
+    onSaveProject();
+    setIsProjectSaved(true);
+    if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
+    saveFeedbackTimer.current = window.setTimeout(
+      () => setIsProjectSaved(false),
+      SAVE_FEEDBACK_MS
+    );
+  };
+
+  /** Apre il selettore file nativo del sistema operativo. */
+  const handleOpenProjectPicker = () => {
+    projectInputRef.current?.click();
+  };
+
+  /**
+   * Ripristina il piano di carico scelto: il file viene convalidato da
+   * `parseProjectFile` e, in caso di file corrotto o di formato estraneo,
+   * l'operatore riceve un avviso chiaro senza che lo stato in scena cambi.
+   */
+  const handleProjectFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Il campo viene svuotato subito: lo stesso file resta riselezionabile.
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const project = await parseProjectFile(file);
+      onLoadProject(project);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Impossibile aprire il piano di carico selezionato.';
+      window.alert(`Apertura del piano non riuscita.\n\n${message}`);
+    }
+  };
 
   /**
    * Esporta il pianale in PNG: copia negli appunti di sistema e, se il browser
@@ -481,6 +541,50 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         </button>
       </div>
 
+      {/* Backup, ripristino e condivisione del lavoro: salva il piano di carico
+          in un file `.json` e riapre un piano salvato in precedenza. */}
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <button
+          type="button"
+          id="btn-save-project"
+          onClick={handleSaveProject}
+          aria-live="polite"
+          title="Salva il piano di carico in un file .json (backup, condivisione, riapertura)"
+          className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-1.5 px-2 rounded flex items-center justify-center gap-1.5 transition cursor-pointer"
+        >
+          <Download className="w-3.5 h-3.5 shrink-0" />
+          <span
+            className={`text-xs font-semibold truncate ${
+              isProjectSaved ? 'text-green-600' : ''
+            }`}
+          >
+            {isProjectSaved ? 'Salvato!' : 'Salva Piano'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          id="btn-open-project"
+          onClick={handleOpenProjectPicker}
+          title="Apri un piano di carico salvato in precedenza (file .json)"
+          className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-1.5 px-2 rounded flex items-center justify-center gap-1.5 transition cursor-pointer"
+        >
+          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+          <span className="text-xs font-semibold text-slate-800 truncate">Apri Piano</span>
+        </button>
+
+        {/* Selettore file nativo del sistema operativo, invisibile: pilotato dal
+            pulsante "Apri Piano" e convalidato da `parseProjectFile`. */}
+        <input
+          ref={projectInputRef}
+          id="project-file-input"
+          type="file"
+          accept=".json,application/json"
+          onChange={handleProjectFileChange}
+          className="hidden"
+        />
+      </div>
+
       {/* Selettore Mezzo */}
       <div className="space-y-2">
         <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
@@ -564,7 +668,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             value={plate}
             onChange={(e) => onUpdatePlate(e.target.value.toUpperCase())}
             placeholder=""
-            maxLength={40}
+            maxLength={PLATE_MAX_LENGTH}
             className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs font-mono font-bold rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 uppercase tracking-wide"
           />
         </div>

@@ -37,6 +37,14 @@
 export const PLATE_INPUT_ID = 'vehicle-plate-input';
 
 /**
+ * Lunghezza massima (caratteri) della targa / identificativo mezzo: è il tetto
+ * condiviso dal campo di testo della sidebar e dalla convalida dei file di
+ * progetto (`utils/fileStorage.ts`), così un piano ripristinato non può portare
+ * in scena una targa più lunga di quella digitabile a mano.
+ */
+export const PLATE_MAX_LENGTH = 40;
+
+/**
  * Sforo massimo (cm) della targa **oltre le sponde laterali** del mezzo: la
  * fascia di scrittura può estendersi fino a `vehicle.width + 100` cm (≈ 350 cm
  * sul bilico CC) — cioè 50 cm per lato — senza essere tagliata dalle pareti.

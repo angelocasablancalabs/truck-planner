@@ -1484,6 +1484,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               return (
                 <g
                   key={item.id}
+                  data-canvas-item={item.code}
+                  data-item-id={item.id}
                   transform={`translate(${item.x}, ${item.y})`}
                   onPointerDown={(e) => handlePointerDown(item, e)}
                   onClick={(e) => e.stopPropagation()}
@@ -1552,6 +1554,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               return (
                 <g
                   key={note.id}
+                  data-canvas-note={note.id}
                   transform={`translate(${note.x}, ${note.y})`}
                   onPointerDown={(e) => handleNotePointerDown(note, e)}
                   onClick={(e) => e.stopPropagation()}

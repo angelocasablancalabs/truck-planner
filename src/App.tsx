@@ -8,11 +8,13 @@ import type {
   LabelDensity,
   SideNote,
   HistorySnapshot,
+  ProjectFile,
 } from './types';
 import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { PrintReport } from './components/PrintReport';
+import { exportProjectToJson } from './utils/fileStorage';
 import {
   calculateSnapPosition,
   findSmartSpawnPosition,
@@ -32,12 +34,15 @@ const BATCH_DEFAULT_QUANTITY = 10;
 const HISTORY_LIMIT = 40;
 
 /**
- * Copia profonda dello stato di stiva: uno snapshot non condivide mai alcun
+ * Copia profonda dello stato del piano: uno snapshot non condivide mai alcun
  * riferimento con lo stato vivo (né tra due fotogrammi distinti).
  */
-const cloneSnapshot = (items: PlacedItem[], notes: SideNote[]): HistorySnapshot => ({
-  items: items.map((item) => ({ ...item })),
-  notes: notes.map((note) => ({ ...note })),
+const cloneSnapshot = (snapshot: HistorySnapshot): HistorySnapshot => ({
+  items: snapshot.items.map((item) => ({ ...item })),
+  notes: snapshot.notes.map((note) => ({ ...note })),
+  vehicle: { ...snapshot.vehicle },
+  plate: snapshot.plate,
+  labelDensity: snapshot.labelDensity,
 });
 
 /**
@@ -90,14 +95,26 @@ export default function App() {
   const canRedo = future.length > 0;
 
   /**
-   * Registra lo stato corrente nella pila dei passati e svuota quella dei
-   * futuri (una nuova azione invalida sempre il Redo).
-   * Va invocata **prima** di ogni mutazione intenzionale di colli o note.
+   * Fotografia completa dello stato logico del piano, nello stesso formato del
+   * file di progetto: colli, note, mezzo, targa e densità etichette. È la base
+   * di ogni fotogramma della cronologia, quindi anche l'apertura di un piano
+   * salvato è annullabile in un solo `Ctrl / Cmd + Z` senza lasciare in scena
+   * il mezzo o la targa del file appena letto.
    */
-  const pushSnapshot = useCallback(() => {
-    setPast((prev) => appendSnapshot(prev, cloneSnapshot(items, notes)));
+  const captureSnapshot = useCallback(
+    (): HistorySnapshot => ({ items, notes, vehicle, plate: vehiclePlate, labelDensity }),
+    [items, notes, vehicle, vehiclePlate, labelDensity]
+  );
+
+  /**
+   * Registra uno stato nella pila dei passati e svuota quella dei futuri (una
+   * nuova azione invalida sempre il Redo). Va invocata **prima** di ogni
+   * mutazione intenzionale, con il fotogramma da conservare.
+   */
+  const pushSnapshot = useCallback((snapshot: HistorySnapshot) => {
+    setPast((prev) => appendSnapshot(prev, cloneSnapshot(snapshot)));
     setFuture([]);
-  }, [items, notes]);
+  }, []);
 
   /**
    * Inizio di un gesto col mouse (pointerDown su un collo o su una nota):
@@ -105,8 +122,8 @@ export default function App() {
    * trascinamento potrebbe risolversi in un semplice click senza spostamenti.
    */
   const handleBeginHistoryGesture = useCallback(() => {
-    pendingSnapshot.current = cloneSnapshot(items, notes);
-  }, [items, notes]);
+    pendingSnapshot.current = captureSnapshot();
+  }, [captureSnapshot]);
 
   /**
    * Fine del gesto (pointerUp): convalida il fotogramma in sospeso **solo** se
@@ -121,11 +138,14 @@ export default function App() {
     setFuture([]);
   }, []);
 
-  /** Ripristina uno snapshot nella stiva, ripulendo le selezioni orfane. */
+  /** Ripristina uno snapshot completo in scena, ripulendo le selezioni orfane. */
   const restoreSnapshot = useCallback((snapshot: HistorySnapshot) => {
-    const restored = cloneSnapshot(snapshot.items, snapshot.notes);
+    const restored = cloneSnapshot(snapshot);
     setItems(restored.items);
     setNotes(restored.notes);
+    setVehicle(restored.vehicle);
+    setVehiclePlate(restored.plate);
+    setLabelDensity(restored.labelDensity);
     // Selezione: sopravvivono solo gli ID ancora presenti nello stato ripristinato,
     // così nessun pannello resta appeso a un collo o a una nota che non esistono più.
     setSelectedItemIds((prev) =>
@@ -141,18 +161,18 @@ export default function App() {
     if (past.length === 0) return;
     const snapshot = past[past.length - 1];
     setPast((prev) => prev.slice(0, -1));
-    setFuture((prev) => [...prev, cloneSnapshot(items, notes)]);
+    setFuture((prev) => [...prev, cloneSnapshot(captureSnapshot())]);
     restoreSnapshot(snapshot);
-  }, [past, items, notes, restoreSnapshot]);
+  }, [past, captureSnapshot, restoreSnapshot]);
 
   /** Ripristina l'azione annullata: simmetrico esatto di `handleUndo`. */
   const handleRedo = useCallback(() => {
     if (future.length === 0) return;
     const snapshot = future[future.length - 1];
     setFuture((prev) => prev.slice(0, -1));
-    setPast((prev) => appendSnapshot(prev, cloneSnapshot(items, notes)));
+    setPast((prev) => appendSnapshot(prev, cloneSnapshot(captureSnapshot())));
     restoreSnapshot(snapshot);
-  }, [future, items, notes, restoreSnapshot]);
+  }, [future, captureSnapshot, restoreSnapshot]);
 
   /** Imposta l'intera lista di selezione (sostituzione, non toggle). */
   const handleSelectItems = useCallback((ids: string[]) => {
@@ -162,7 +182,7 @@ export default function App() {
   // Aggiungi un nuovo collo al pianale, nel primo slot libero disponibile
   const handleAddItem = (pallet: PalletDefinition, options: AddItemOptions = {}) => {
     // Fotogramma PRIMA della mutazione: l'aggiunta è un passo di Undo.
-    pushSnapshot();
+    pushSnapshot(captureSnapshot());
 
     const width = options.width ?? (pallet.isBulk ? vehicle.width : pallet.width);
     const length = options.length ?? pallet.length;
@@ -214,7 +234,7 @@ export default function App() {
       color?: string
     ) => {
       // Fotogramma PRIMA della mutazione: l'intero lotto è UN passo di Undo.
-      pushSnapshot();
+      pushSnapshot(captureSnapshot());
 
       const requested = Number.isFinite(quantity)
         ? Math.floor(quantity)
@@ -266,7 +286,7 @@ export default function App() {
 
       setSelectedItemIds([]);
     },
-    [vehicle, pushSnapshot]
+    [vehicle, pushSnapshot, captureSnapshot]
   );
 
   /**
@@ -303,14 +323,14 @@ export default function App() {
       if (ids.length === 0) return;
 
       // Fotogramma PRIMA della mutazione (rinnovo, rinomina o ricolorazione).
-      pushSnapshot();
+      pushSnapshot(captureSnapshot());
 
       const idSet = new Set(ids);
       setItems((prev) =>
         prev.map((item) => (idSet.has(item.id) ? { ...item, ...updates } : item))
       );
     },
-    [pushSnapshot]
+    [pushSnapshot, captureSnapshot]
   );
 
   // Rotazione di 90 gradi ancorata al baricentro, con riallineamento magnetico.
@@ -320,7 +340,7 @@ export default function App() {
     const idSet = new Set(selectedItemIds);
 
     // Fotogramma PRIMA della mutazione: la rotazione (anche di gruppo) è un passo.
-    pushSnapshot();
+    pushSnapshot(captureSnapshot());
 
     setItems((prev) =>
       prev.map((item) => {
@@ -368,26 +388,82 @@ export default function App() {
         };
       })
     );
-  }, [selectedItemIds, vehicle, pushSnapshot]);
+  }, [selectedItemIds, vehicle, pushSnapshot, captureSnapshot]);
 
   // Cancellazione di TUTTI i colli selezionati (batch) + svuotamento selezione.
   const handleDeleteSelected = useCallback(() => {
     if (selectedItemIds.length === 0) return;
 
     // Fotogramma PRIMA della mutazione: la cancellazione è un passo di Undo.
-    pushSnapshot();
+    pushSnapshot(captureSnapshot());
 
     const idSet = new Set(selectedItemIds);
     setItems((prev) => prev.filter((item) => !idSet.has(item.id)));
     setSelectedItemIds([]);
-  }, [selectedItemIds, pushSnapshot]);
+  }, [selectedItemIds, pushSnapshot, captureSnapshot]);
 
   /** Svuotamento completo del pianale ("Svuota"): un solo passo di Undo. */
   const handleClearAll = useCallback(() => {
-    pushSnapshot();
+    pushSnapshot(captureSnapshot());
     setItems([]);
     setSelectedItemIds([]);
-  }, [pushSnapshot]);
+  }, [pushSnapshot, captureSnapshot]);
+
+  /* ------------------------------------------------------------------------ *
+   *  SALVA & APRI PIANO DI CARICO (.json)
+   *
+   *  Backup, ripristino e condivisione dei lavori: il piano di carico viene
+   *  serializzato in un file leggibile e riapribile in un secondo momento, anche
+   *  su un'altra macchina. È l'unica funzione che ricostruisce **tutto** lo
+   *  stato logico della stiva in un colpo solo: mezzo, targa, colli, note
+   *  laterali e densità etichette.
+   * ------------------------------------------------------------------------ */
+
+  /**
+   * Raccoglie lo stato corrente nel formato ufficiale `ProjectFile` e ne innesca
+   * il download come file `.json` (nome derivato dalla targa del mezzo).
+   */
+  const handleSaveProject = useCallback(() => {
+    const project: ProjectFile = {
+      version: 1,
+      app: 'truck-planner',
+      timestamp: new Date().toISOString(),
+      vehicle,
+      plate: vehiclePlate,
+      items,
+      notes,
+      labelDensity,
+    };
+
+    exportProjectToJson(project);
+  }, [vehicle, vehiclePlate, items, notes, labelDensity]);
+
+  /**
+   * Apre un piano di carico salvato in precedenza e lo mette in scena.
+   *
+   * Il fotogramma viene registrato **prima** del ripristino: se l'apertura è
+   * involontaria, `Ctrl / Cmd + Z` riporta istantaneamente il pianale allo stato
+   * precedente (colli, note e — come per ogni Undo — la selezione ripulita).
+   * La lista dei colli e quella delle note vengono copiate in profondità, così
+   * il file appena letto non condivide riferimenti con lo stato vivo.
+   */
+  const handleLoadProject = useCallback(
+    (project: ProjectFile) => {
+      // Fotogramma PRIMA del ripristino: l'apertura è un passo di Undo.
+      pushSnapshot(captureSnapshot());
+
+      setVehicle(project.vehicle);
+      setVehiclePlate(project.plate ?? '');
+      setItems(project.items.map((item) => ({ ...item })));
+      setNotes((project.notes ?? []).map((note) => ({ ...note })));
+      setLabelDensity(project.labelDensity ?? 'all');
+
+      // Nessuna selezione orfana: le selezioni correnti vengono azzerate.
+      setSelectedItemIds([]);
+      setSelectedNoteId(null);
+    },
+    [pushSnapshot, captureSnapshot]
+  );
 
   /* ------------------------------------------------------------------------ *
    *  NOTE LATERALI DI CARICO (SIDE ANNOTATIONS)
@@ -412,33 +488,33 @@ export default function App() {
         id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       };
       // Fotogramma PRIMA della mutazione: la creazione della nota è un passo.
-      pushSnapshot();
+      pushSnapshot(captureSnapshot());
       setNotes((prev) => [...prev, newNote]);
       setSelectedNoteId(newNote.id);
       setSelectedItemIds([]);
     },
-    [pushSnapshot]
+    [pushSnapshot, captureSnapshot]
   );
 
   /** Aggiorna testo, colore, corpo o misure di una nota. */
   const handleUpdateNote = useCallback(
     (id: string, updates: Partial<SideNote>) => {
       // Fotogramma PRIMA della mutazione: ogni modifica è un passo di Undo.
-      pushSnapshot();
+      pushSnapshot(captureSnapshot());
       setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, ...updates } : note)));
     },
-    [pushSnapshot]
+    [pushSnapshot, captureSnapshot]
   );
 
   /** Elimina una nota: la selezione viene azzerata per non lasciare riferimenti. */
   const handleDeleteNote = useCallback(
     (id: string) => {
       // Fotogramma PRIMA della mutazione: l'eliminazione è un passo di Undo.
-      pushSnapshot();
+      pushSnapshot(captureSnapshot());
       setNotes((prev) => prev.filter((note) => note.id !== id));
       setSelectedNoteId(null);
     },
-    [pushSnapshot]
+    [pushSnapshot, captureSnapshot]
   );
 
   /**
@@ -579,6 +655,8 @@ export default function App() {
             onSelectVehicle={setVehicle}
             plate={vehiclePlate}
             onUpdatePlate={setVehiclePlate}
+            onSaveProject={handleSaveProject}
+            onLoadProject={handleLoadProject}
             onAddItem={handleAddItem}
             onRotateSelected={handleRotateSelected}
             onDeleteSelected={handleDeleteSelected}
