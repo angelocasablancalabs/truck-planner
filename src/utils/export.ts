@@ -1,5 +1,5 @@
 import type { LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
-import { calculateLdmMetrics, hasCollision, isOutOfBounds } from './snapping';
+import { calculateLdmMetrics, formatLdmMeters, hasCollision, isOutOfBounds } from './snapping';
 import {
   ALERT_COLOR,
   LDM_BADGE,
@@ -621,7 +621,7 @@ export const buildPianoSvg = (
           LDM_BADGE_LEFT_X,
           LDM_BADGE_CENTER_X,
           maxOccupiedY,
-          `▶ ${(maxOccupiedY / 100).toFixed(2)} m`,
+          `▶ ${formatLdmMeters(maxOccupiedY)} m`,
           COLORS.ldmBadge
         )
       );
@@ -641,7 +641,7 @@ export const buildPianoSvg = (
           LDM_BADGE_LEFT_X,
           LDM_BADGE_CENTER_X,
           ldm.leftY,
-          `▶ ${(ldm.leftY / 100).toFixed(2)} m`,
+          `▶ ${formatLdmMeters(ldm.leftY)} m`,
           leftBadgeColor
         )
       );
@@ -660,7 +660,7 @@ export const buildPianoSvg = (
           ldmBadgeRightLeftX(vehicle.width),
           ldmBadgeRightCenterX(vehicle.width),
           ldm.rightY,
-          `◀ ${(ldm.rightY / 100).toFixed(2)} m`,
+          `◀ ${formatLdmMeters(ldm.rightY)} m`,
           rightBadgeColor
         )
       );

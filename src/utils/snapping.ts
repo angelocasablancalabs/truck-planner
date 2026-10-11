@@ -153,6 +153,27 @@ export function calculateLdmMetrics(vehicle: VehicleConfig, items: PlacedItem[])
 }
 
 /**
+ * Formatta un ingombro LDM (cm) in metri lineari con **arrotondamento per
+ * eccesso al centimetro intero**: il mezzo centimetro scatta al centimetro
+ * superiore (es. `136.5 cm` → `"1.37"`).
+ *
+ * Il previo `Math.round(cm * 10) / 10` normalizza il rumore floating-point
+ * nativo di JavaScript (es. `1.365` rappresentato come `1.3649999…`), che con
+ * la sola `Math.ceil` avrebbe prodotto un arrotondamento incoerente.
+ *
+ * Funzione **pura** condivisa da canvas a schermo (`TruckCanvas.tsx`), export
+ * PNG (`utils/export.ts`) e scheda di stampa A4 (`PrintReport.tsx`): un'unica
+ * fonte di verità, nessuna discrepanza possibile tra le tre rese.
+ *
+ * @param cm Ingombro lineare in centimetri reali
+ */
+export function formatLdmMeters(cm: number): string {
+  // Arrotonda i centimetri per eccesso al cm intero (es. 136.5 -> 137 -> "1.37")
+  const roundedCm = Math.ceil(Math.round(cm * 10) / 10);
+  return (roundedCm / 100).toFixed(2);
+}
+
+/**
  * Indica se il collo esce dalla sagoma utile del rimorchio (pareti, cabina o
  * porte posteriori). È la condizione che accende l'allarme rosso sul canvas.
  */

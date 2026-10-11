@@ -19,13 +19,35 @@ import {
   calculateDockDisplacement,
   calculateSnapPosition,
   findSmartSpawnPosition,
-  isColliding,
+  isRectColliding,
   toPrecision,
 } from './utils/snapping';
 import type { DockDirection } from './utils/snapping';
 
-/** Tolleranza di aggancio magnetico applicata dopo una rotazione (cm). */
-const ROTATION_SNAP_THRESHOLD = 10;
+/* -------------------------------------------------------------------------- *
+ *  AUTO-FITTING MAGNETICO POST-ROTAZIONE
+ *
+ *  La rotazione fa perno sul baricentro, quindi i bordi del collo arretrano o
+ *  avanzano di `|width − length| / 2` (20 cm per un PLT EUR, 39,25 cm per un CC):
+ *  la vecchia soglia fissa di 10 cm non bastava più a riagganciare il collo al
+ *  bordo del vicino (es. un EUR ruotato a Y = 100 che lasciava 20 cm di fessura).
+ *  La soglia è ora **dinamica** e copre per costruzione l'inversione geometrica.
+ * -------------------------------------------------------------------------- */
+
+/** Soglia minima di aggancio post-rotazione (cm): copre i formati più piccoli. */
+const ROTATION_SNAP_MIN_THRESHOLD = 45;
+/** Margine di sicurezza aggiunto a metà scarto dimensionale (cm). */
+const ROTATION_SNAP_SLACK = 5;
+
+/**
+ * Tolleranza di aggancio magnetico applicata dopo una rotazione (cm):
+ * `max(45, |width − length| / 2 + 5)`.
+ */
+const rotationSnapThreshold = (item: { width: number; length: number }): number =>
+  Math.max(
+    ROTATION_SNAP_MIN_THRESHOLD,
+    Math.abs(item.width - item.length) / 2 + ROTATION_SNAP_SLACK
+  );
 
 /** Limiti di quantità di un lotto caricato dall'accordion multifunzione. */
 const BATCH_MIN_QUANTITY = 1;
@@ -392,7 +414,9 @@ export default function App() {
         const clampedX = Math.max(0, Math.min(vehicle.width - newWidth, rawX));
         const clampedY = Math.max(0, Math.min(vehicle.length - newLength, rawY));
 
-        // Riallineamento magnetico al bordo/parete più vicina (tolleranza 10 cm).
+        // Auto-Fitting Magnetico attivo: il collo ruotato cerca il contatto a
+        // filo (pareti e colli adiacenti) con la tolleranza dinamica che copre
+        // l'inversione geometrica `|W − L| / 2`.
         const others = prev.filter((other) => other.id !== item.id);
         const snapped = calculateSnapPosition(
           clampedX,
@@ -401,15 +425,13 @@ export default function App() {
           newLength,
           vehicle,
           others,
-          ROTATION_SNAP_THRESHOLD
+          rotationSnapThreshold(item)
         );
 
-        // Adotta l'assestamento solo se non introduce sovrapposizioni.
+        // L'assestamento viene adottato solo se la posizione riassestata è
+        // priva di collisioni; altrimenti si ripiega sulla centratura clampata.
         const snappedCollides = others.some((other) =>
-          isColliding(
-            { ...item, width: newWidth, length: newLength, x: snapped.x, y: snapped.y },
-            other
-          )
+          isRectColliding(snapped.x, snapped.y, newWidth, newLength, other)
         );
 
         return {

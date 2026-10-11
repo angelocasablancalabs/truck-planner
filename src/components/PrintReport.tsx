@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { PALLET_CATALOG, NOMINAL_QUOTA_CM, NOMINAL_QUOTA_COLOR } from '../constants';
 import { LDM_BADGE, LDM_BADGE_CENTER_X, LDM_BADGE_COLOR, LDM_BADGE_LEFT_X, LDM_BADGE_MUTED_COLOR, LDM_GUIDE_CLOSING_LENGTH, LDM_GUIDE_COLOR, LDM_GUIDE_DASH, ldmBadgeRightCenterX, ldmBadgeRightLeftX } from '../constants';
-import { calculateLdmMetrics } from '../utils/snapping';
+import { calculateLdmMetrics, formatLdmMeters } from '../utils/snapping';
 import type { LdmMetrics } from '../utils/snapping';
 import { getPianoExtent, noteClipId } from '../utils/export';
 import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
@@ -264,8 +264,8 @@ const PrintSummaryTable: React.FC<PrintSummaryTableProps> = ({
           <td colSpan={4} className="border border-slate-300 px-1.5 py-1">
             Ingombro Lineare Effettivo (LDM):{' '}
             {ldm.isAsymmetric
-              ? `Lato SX ${(ldm.leftY / 100).toFixed(2)} m | Lato DX ${(ldm.rightY / 100).toFixed(2)} m`
-              : `${(ldm.maxOccupiedY / 100).toFixed(2)} m`}
+              ? `Lato SX ${formatLdmMeters(ldm.leftY)} m | Lato DX ${formatLdmMeters(ldm.rightY)} m`
+              : `${formatLdmMeters(ldm.maxOccupiedY)} m`}
           </td>
         </tr>
       </tfoot>
@@ -526,7 +526,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
                   LDM_BADGE_LEFT_X,
                   LDM_BADGE_CENTER_X,
                   ldm.maxOccupiedY,
-                  `▶ ${(ldm.maxOccupiedY / 100).toFixed(2)} m`,
+                  `▶ ${formatLdmMeters(ldm.maxOccupiedY)} m`,
                   COLORS.ldmBadge
                 )}
               </g>
@@ -557,7 +557,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
                   LDM_BADGE_LEFT_X,
                   LDM_BADGE_CENTER_X,
                   ldm.leftY,
-                  `▶ ${(ldm.leftY / 100).toFixed(2)} m`,
+                  `▶ ${formatLdmMeters(ldm.leftY)} m`,
                   leftLdmBadgeColor
                 )}
 
@@ -583,7 +583,7 @@ export const PrintReport: React.FC<PrintReportProps> = ({
                   ldmBadgeRightLeftX(vehicle.width),
                   ldmBadgeRightCenterX(vehicle.width),
                   ldm.rightY,
-                  `◀ ${(ldm.rightY / 100).toFixed(2)} m`,
+                  `◀ ${formatLdmMeters(ldm.rightY)} m`,
                   rightLdmBadgeColor
                 )}
               </g>

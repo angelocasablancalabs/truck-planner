@@ -10,6 +10,7 @@ import type {
 import {
   calculateLdmMetrics,
   calculateSnapPosition,
+  formatLdmMeters,
   hasCollision,
   isOutOfBounds,
   isRectColliding,
@@ -1293,7 +1294,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   textAnchor="middle"
                   className="text-[10px] font-bold fill-white"
                 >
-                  ▶ {(maxOccupiedY / 100).toFixed(2)} m
+                  ▶ {formatLdmMeters(maxOccupiedY)} m
                 </text>
               </g>
             )}
@@ -1334,7 +1335,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   textAnchor="middle"
                   className="text-[10px] font-bold fill-white"
                 >
-                  ▶ {(leftOccupiedY / 100).toFixed(2)} m
+                  ▶ {formatLdmMeters(leftOccupiedY)} m
                 </text>
 
                 {/* Indicatore DX: metà destra del pianale, badge oltre la parete. */}
@@ -1370,7 +1371,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                   textAnchor="middle"
                   className="text-[10px] font-bold fill-white"
                 >
-                  ◀ {(rightOccupiedY / 100).toFixed(2)} m
+                  ◀ {formatLdmMeters(rightOccupiedY)} m
                 </text>
               </g>
             )}
