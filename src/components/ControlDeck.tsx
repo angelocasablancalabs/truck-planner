@@ -36,6 +36,7 @@ import {
   openProjectWithPicker,
   parseProjectFile,
 } from '../utils/fileStorage';
+import type { DockDirection } from '../utils/snapping';
 import {
   Truck,
   RotateCw,
@@ -44,6 +45,8 @@ import {
   Info,
   ArrowUpDown,
   ArrowLeftRight,
+  AlignLeft,
+  AlignRight,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -141,6 +144,12 @@ interface ControlDeckProps {
   savedFileName: string | null;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
   onRotateSelected: () => void;
+  /**
+   * Spinta a Battuta (Sweep Docking): spinge il blocco selezionato verso il
+   * punto cardinale richiesto, fino a filo della parete o del primo ostacolo.
+   * Condivide il motore puro con le quattro frecce della tastiera.
+   */
+  onDockSelected: (direction: DockDirection) => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
   onUpdateItemProperties: (target: string | string[], updates: Partial<PlacedItem>) => void;
@@ -206,6 +215,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   savedFileName,
   onAddItem,
   onRotateSelected,
+  onDockSelected,
   onDeleteSelected,
   onClearAll,
   onUpdateItemProperties,
@@ -1195,6 +1205,30 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             </button>
           </div>
 
+          {/* Spinta a Battuta (Sweep Docking): porta il blocco a filo della
+              parete o del primo ostacolo incontrato, conservando la geometria
+              reciproca. Stesso motore delle quattro frecce della tastiera. */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onDockSelected('left')}
+              className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
+              title="Spingi a battuta a sinistra (Freccia ←)"
+            >
+              <AlignLeft className="w-3.5 h-3.5 text-slate-600" />
+              <span>Spingi a SX</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onDockSelected('right')}
+              className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
+              title="Spingi a battuta a destra (Freccia →)"
+            >
+              <AlignRight className="w-3.5 h-3.5 text-slate-600" />
+              <span>Spingi a DX</span>
+            </button>
+          </div>
+
           {/* Nota laterale con eredità automatica: quota, titolo e colore del
               collo selezionato vengono copiati nella nuova annotazione. */}
           <button
@@ -1414,6 +1448,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Elimina collo / nota</span>
               <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Canc</kbd>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-300">Spingi a battuta (pareti / ostacoli)</span>
+              <kbd className="bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-200">Frecce ← ↑ → ↓</kbd>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-300">Annulla</span>

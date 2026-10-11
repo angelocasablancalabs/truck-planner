@@ -16,11 +16,13 @@ import { ControlDeck } from './components/ControlDeck';
 import { PrintReport } from './components/PrintReport';
 import { isPickerAbortError, saveProjectWithHandle } from './utils/fileStorage';
 import {
+  calculateDockDisplacement,
   calculateSnapPosition,
   findSmartSpawnPosition,
   isColliding,
   toPrecision,
 } from './utils/snapping';
+import type { DockDirection } from './utils/snapping';
 
 /** Tolleranza di aggancio magnetico applicata dopo una rotazione (cm). */
 const ROTATION_SNAP_THRESHOLD = 10;
@@ -422,6 +424,40 @@ export default function App() {
     );
   }, [selectedItemIds, vehicle, pushSnapshot, captureSnapshot]);
 
+  /**
+   * Spinta a Battuta (Sweep Docking): spinge rigidamente il blocco dei colli
+   * selezionati verso uno dei quattro punti cardinali finché non tocca la
+   * parete, le porte o il primo ostacolo. La fisica vive nel motore puro
+   * `calculateDockDisplacement` (unica fonte di verità, condivisa con i pulsanti
+   * della sidebar e con le quattro frecce della tastiera).
+   *
+   * Il blocco conserva la geometria reciproca (stesso delta per tutti i membri)
+   * e si arresta a filo esatto: zero collisioni per costruzione. Una spinta già
+   * a battuta (`dx === 0 && dy === 0`) non produce né movimento né fotogramma.
+   */
+  const handleDockSelected = useCallback(
+    (direction: DockDirection) => {
+      if (selectedItemIds.length === 0) return;
+
+      const { dx, dy } = calculateDockDisplacement(items, selectedItemIds, direction, vehicle);
+      // Già a battuta: nessuno spostamento, nessun passo di cronologia.
+      if (dx === 0 && dy === 0) return;
+
+      // Fotogramma PRIMA della mutazione: l'intera spinta è UN passo di Undo.
+      pushSnapshot(captureSnapshot());
+
+      const idSet = new Set(selectedItemIds);
+      setItems((prev) =>
+        prev.map((item) =>
+          idSet.has(item.id)
+            ? { ...item, x: toPrecision(item.x + dx), y: toPrecision(item.y + dy) }
+            : item
+        )
+      );
+    },
+    [items, selectedItemIds, vehicle, pushSnapshot, captureSnapshot]
+  );
+
   // Cancellazione di TUTTI i colli selezionati (batch) + svuotamento selezione.
   const handleDeleteSelected = useCallback(() => {
     if (selectedItemIds.length === 0) return;
@@ -684,6 +720,33 @@ export default function App() {
         return;
       }
 
+      // Spinta a Battuta con le quattro frecce: il blocco selezionato viene
+      // portato a filo della parete o del primo ostacolo in quella direzione.
+      // Le guardie sui campi di scrittura sono già passate, quindi mentre si
+      // digita la freccia conserva il proprio ruolo di editing del testo.
+      if (selectedItemIds.length > 0) {
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          handleDockSelected('left');
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          handleDockSelected('right');
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          handleDockSelected('up');
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          handleDockSelected('down');
+          return;
+        }
+      }
+
       if (e.code === 'Space') {
         e.preventDefault();
         handleRotateSelected();
@@ -703,6 +766,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     handleRotateSelected,
+    handleDockSelected,
     handleDeleteSelected,
     handleDeleteNote,
     handleUndo,
@@ -759,6 +823,7 @@ export default function App() {
             savedFileName={savedFileName}
             onAddItem={handleAddItem}
             onRotateSelected={handleRotateSelected}
+            onDockSelected={handleDockSelected}
             onDeleteSelected={handleDeleteSelected}
             onUpdateItemProperties={handleUpdateItemProperties}
             onAddBatch={handleAddBatch}

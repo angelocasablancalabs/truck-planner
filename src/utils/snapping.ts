@@ -349,3 +349,136 @@ export function findSmartSpawnPosition(
  * di stato superflui durante il trascinamento.
  */
 export const toPrecision = (value: number): number => Math.round(value * 10) / 10;
+
+/* -------------------------------------------------------------------------- *
+ *  SPINTA A BATTUTA (SWEEP DOCKING)
+ *
+ *  Il blocco selezionato viene spinto rigidamente verso uno dei quattro punti
+ *  cardinali del pianale finché non incontra il primo ostacolo: la parete, le
+ *  porte o un collo non selezionato. L'arresto è **a filo esatto** (0 cm di
+ *  distanza), quindi la traslazione non può mai generare una collisione.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Direzione della spinta a battuta:
+ * - `left`  → parete sinistra (`X = 0`) o ostacolo a sinistra;
+ * - `right` → parete destra (`X = vehicle.width`) o ostacolo a destra;
+ * - `up`    → Cabina (`Y = 0`) o ostacolo sopra;
+ * - `down`  → Porte posteriori o ostacolo sotto.
+ */
+export type DockDirection = 'left' | 'right' | 'up' | 'down';
+
+/** Verifica che due intervalli monodimensionali si compenetrino davvero. */
+const rangesOverlap = (startA: number, sizeA: number, startB: number, sizeB: number): boolean =>
+  Math.max(startA, startB) < Math.min(startA + sizeA, startB + sizeB);
+
+/**
+ * Calcola lo spostamento rigido `{ dx, dy }` che porta il blocco dei colli
+ * selezionati **a battuta** contro la parete o contro il primo ostacolo
+ * incontrato nella direzione richiesta.
+ *
+ * Il blocco conserva la propria geometria reciproca (tutti i membri ricevono lo
+ * stesso delta) e si arresta al minimo fra tutti i vincoli validi: il margine
+ * residuo verso la parete e la distanza da ogni collo non selezionato che
+ * condivide la fascia ortogonale e si trova effettivamente davanti al blocco.
+ * L'arresto a filo (0 cm di distanza) non è una collisione, quindi la spinta
+ * non può mai introdurre sovrapposizioni.
+ *
+ * Funzione **pura**, condivisa dai pulsanti della sidebar e dalle scorciatoie
+ * con le quattro frecce (`App.tsx`): un'unica fonte di verità della fisica.
+ *
+ * @param items       Tutti i colli del pianale (selezionati e non).
+ * @param selectedIds ID dei colli che compongono il blocco da spingere.
+ * @param direction   Punto cardinale verso cui spingere il blocco.
+ * @param vehicle     Configurazione del mezzo (dimensioni utili in cm).
+ */
+export function calculateDockDisplacement(
+  items: PlacedItem[],
+  selectedIds: string[],
+  direction: DockDirection,
+  vehicle: VehicleConfig
+): { dx: number; dy: number } {
+  const idSet = new Set(selectedIds);
+  const selected = items.filter((item) => idSet.has(item.id));
+  // Nessun collo selezionato: nessuna spinta possibile.
+  if (selected.length === 0) return { dx: 0, dy: 0 };
+
+  // Ostacoli fissi: tutti i colli che NON fanno parte del blocco.
+  const others = items.filter((item) => !idSet.has(item.id));
+
+  if (direction === 'left') {
+    // Margine del blocco dalla parete sinistra: si ferma il membro più a sinistra.
+    const maxMoveWall = Math.min(...selected.map((s) => s.x));
+    const distances: number[] = [];
+
+    for (const s of selected) {
+      for (const o of others) {
+        // L'ostacolo deve condividere la fascia Y del collo spinto...
+        if (!rangesOverlap(s.y, s.length, o.y, o.length)) continue;
+        // ...ed essere interamente alla sua sinistra (a filo ammesso).
+        if (o.x + o.width > s.x) continue;
+        distances.push(s.x - (o.x + o.width));
+      }
+    }
+
+    const move = distances.length > 0 ? Math.min(maxMoveWall, ...distances) : maxMoveWall;
+    return { dx: -Math.max(0, Math.round(move * 10) / 10), dy: 0 };
+  }
+
+  if (direction === 'right') {
+    // Margine del blocco dalla parete destra: si ferma il membro più a destra.
+    const maxMoveWall = vehicle.width - Math.max(...selected.map((s) => s.x + s.width));
+    const distances: number[] = [];
+
+    for (const s of selected) {
+      for (const o of others) {
+        if (!rangesOverlap(s.y, s.length, o.y, o.length)) continue;
+        // Ostacolo interamente alla destra del collo spinto (a filo ammesso).
+        if (o.x < s.x + s.width) continue;
+        distances.push(o.x - (s.x + s.width));
+      }
+    }
+
+    const move = distances.length > 0 ? Math.min(maxMoveWall, ...distances) : maxMoveWall;
+    return { dx: Math.max(0, Math.round(move * 10) / 10), dy: 0 };
+  }
+
+  if (direction === 'up') {
+    // Margine del blocco dalla parete Cabina: si ferma il membro più in alto.
+    const maxMoveWall = Math.min(...selected.map((s) => s.y));
+    const distances: number[] = [];
+
+    for (const s of selected) {
+      for (const o of others) {
+        // L'ostacolo deve condividere la fascia X del collo spinto...
+        if (!rangesOverlap(s.x, s.width, o.x, o.width)) continue;
+        // ...ed essere interamente sopra di lui (a filo ammesso).
+        if (o.y + o.length > s.y) continue;
+        distances.push(s.y - (o.y + o.length));
+      }
+    }
+
+    const move = distances.length > 0 ? Math.min(maxMoveWall, ...distances) : maxMoveWall;
+    return { dx: 0, dy: -Math.max(0, Math.round(move * 10) / 10) };
+  }
+
+  // Direzione 'down': verso le Porte posteriori. Se il blocco è già in sagoma la
+  // battuta è la linea delle porte; se sforza già oltre (zona di overhang
+  // consentita) la battuta è la fine del buffer `REAR_OVERHANG_LIMIT`.
+  const maxS_Y = Math.max(...selected.map((s) => s.y + s.length));
+  const target = maxS_Y <= vehicle.length ? vehicle.length : vehicle.length + REAR_OVERHANG_LIMIT;
+  const maxMoveWall = target - maxS_Y;
+  const distances: number[] = [];
+
+  for (const s of selected) {
+    for (const o of others) {
+      if (!rangesOverlap(s.x, s.width, o.x, o.width)) continue;
+      // Ostacolo interamente sotto il collo spinto (a filo ammesso).
+      if (o.y < s.y + s.length) continue;
+      distances.push(o.y - (s.y + s.length));
+    }
+  }
+
+  const move = distances.length > 0 ? Math.min(maxMoveWall, ...distances) : maxMoveWall;
+  return { dx: 0, dy: Math.max(0, Math.round(move * 10) / 10) };
+}
