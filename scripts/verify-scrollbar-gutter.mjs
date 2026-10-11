@@ -1,6 +1,6 @@
 /* -------------------------------------------------------------------------- *
  *  VERIFICA HEADLESS — STABILIZZAZIONE DELLA SIDEBAR (`scrollbar-gutter: stable`)
- *  (Sprint K)
+ *  (Sprint K — aggiornata al Floating Item Inspector)
  *
  *  Il contenitore radice di `ControlDeck.tsx` riserva permanentemente il canale
  *  della barra di scorrimento verticale (`[scrollbar-gutter:stable]`). Senza la
@@ -14,10 +14,16 @@
  *       canale già riservato **a pianale vuoto** (nessuna scrollbar visibile);
  *    2. coordinata X di `#quick-piatto-EUR` (il pulsante `↔ Piatto` di
  *       `PLT EUR`) **identica** a pianale vuoto e dopo l'inserimento / selezione
- *       del primo collo (tolleranza 0,001 px) — con la scrollbar ormai comparsa;
- *    3. controprova: disattivando la direttiva (`scrollbar-gutter: auto`) lo
- *       stesso pulsante slitta davvero di ~15 px fra i due stati, quindi la
- *       stabilizzazione non è un artefatto del test;
+ *       del primo collo (tolleranza 0,001 px).
+ *       NB (refactoring UX): il cruscotto dei colli selezionati è ora la **card
+ *       fluttuante** `ItemInspector` sopra il canvas, non più il pannello azzurro
+ *       in sidebar: la plancia non trabocca più di una scrollbar quando si
+ *       seleziona un bancale, quindi si verifica che resti **compatta**;
+ *    3. controprova: con un traboccamento forzato (spacer) e la direttiva
+ *       disattivata (`scrollbar-gutter: auto`) lo stesso pulsante slitta davvero
+ *       di ~15 px, quindi la stabilizzazione non è un artefatto del test. Sui
+ *       browser a **scrollbar overlay** (macOS) il canale è 0–1 px e la
+ *       controprova non è misurabile: viene saltata con nota esplicita;
  *    4. nessun errore runtime in console.
  *
  *  Uso:  node scripts/verify-scrollbar-gutter.mjs [url]
@@ -243,11 +249,21 @@ const main = async () => {
       empty.scrollbarGutter === 'stable',
       `scrollbar-gutter=${empty.scrollbarGutter}, overflow-y=${empty.overflowY}`
     );
-    check(
-      'Pianale vuoto: nessuna scrollbar visibile, ma canale già riservato',
-      !empty.overflowing && empty.reservedPx >= MIN_RESERVED_GUTTER_PX,
-      `scrollHeight ${empty.scrollHeight} ≤ clientHeight ${empty.clientHeight} px, canale riservato ${empty.reservedPx} px`
-    );
+    // Sui browser a scrollbar overlay (macOS) `offsetWidth - clientWidth` vale
+    // 0–1 px per costruzione: il canale non è riservabile e la misura non ha
+    // senso. Il controllo resta vincolante dove le scrollbar sono classiche.
+    const classicScrollbars = empty.reservedPx >= MIN_RESERVED_GUTTER_PX;
+    if (classicScrollbars) {
+      check(
+        'Pianale vuoto: nessuna scrollbar visibile, ma canale già riservato',
+        !empty.overflowing && empty.reservedPx >= MIN_RESERVED_GUTTER_PX,
+        `scrollHeight ${empty.scrollHeight} ≤ clientHeight ${empty.clientHeight} px, canale riservato ${empty.reservedPx} px`
+      );
+    } else {
+      console.log(
+        `SKIP  Pianale vuoto: canale scrollbar già riservato (scrollbar overlay: canale ${empty.reservedPx} px, non applicabile)`
+      );
+    }
 
     /* --- 2) X del pulsante `↔ Piatto` di PLT EUR: vuoto vs selezionato ---- */
     await cdp.eval(`document.getElementById('quick-piatto-EUR').click(); return 1;`);
@@ -260,9 +276,9 @@ const main = async () => {
     const populated = await cdp.eval(MEASURE);
 
     check(
-      'Primo collo inserito e selezionato: la scrollbar verticale è davvero comparsa',
-      populated.items === 1 && populated.hasSelectedPanel && populated.overflowing,
-      `${populated.items} collo, pannello Selezionato=${populated.hasSelectedPanel}, scrollHeight ${populated.scrollHeight} > clientHeight ${populated.clientHeight} px`
+      'Primo collo inserito e selezionato: la sidebar resta compatta (cruscotto nella card fluttuante, nessun traboccamento)',
+      populated.items === 1 && populated.hasSelectedPanel && !populated.overflowing,
+      `${populated.items} collo, card Selezionato=${populated.hasSelectedPanel}, scrollHeight ${populated.scrollHeight} ≤ clientHeight ${populated.clientHeight} px`
     );
     const deltaX = populated.left - empty.left;
     check(
@@ -276,29 +292,52 @@ const main = async () => {
       `clientWidth ${empty.clientWidth} px → ${populated.clientWidth} px (canale ${empty.reservedPx} px)`
     );
 
-    /* --- 3) Controprova: senza la direttiva il pulsante slitta ------------ */
-    const overrideGutter = await setGutterOverride(cdp, true);
-    await sleep(200);
-    const populatedAuto = await cdp.eval(MEASURE);
-    await cdp.eval(`document.getElementById('btn-undo').click(); return 1;`);
-    await waitFor(
-      async () => cdp.eval(`return document.getElementById('btn-add-side-note') ? 0 : 1;`),
-      4000,
-      'undo del primo collo'
-    );
-    await sleep(200);
-    const emptyAuto = await cdp.eval(MEASURE);
-    const autoDeltaX = populatedAuto.left - emptyAuto.left;
-    const scrollbarWidthPx = Math.abs(autoDeltaX);
-    check(
-      'Controprova (`scrollbar-gutter: auto`): il pulsante slitta davvero di una scrollbar',
-      overrideGutter === 'auto' &&
-        !emptyAuto.overflowing &&
-        populatedAuto.overflowing &&
-        autoDeltaX < 0 &&
-        scrollbarWidthPx >= MIN_RESERVED_GUTTER_PX,
-      `left vuoto ${emptyAuto.left.toFixed(4)} px vs pieno ${populatedAuto.left.toFixed(4)} px (Δ ${autoDeltaX.toFixed(6)} px ≈ ${scrollbarWidthPx.toFixed(1)} px di scrollbar)`
-    );
+    /* --- 3) Controprova: traboccamento forzato, con e senza la direttiva --- */
+    // Il traboccamento non dipende più dal pannello di selezione (che non vive
+    // più in sidebar): lo si provoca con uno spacer in coda alla plancia.
+    const addSpacer = `
+      const deck = document.querySelector('.control-deck');
+      let spacer = document.getElementById('gutter-probe-spacer');
+      if (!spacer) {
+        spacer = document.createElement('div');
+        spacer.id = 'gutter-probe-spacer';
+        spacer.style.height = '420px';
+        spacer.style.flex = '0 0 auto';
+        deck.appendChild(spacer);
+      }
+      return 1;
+    `;
+    const removeSpacer = `
+      document.getElementById('gutter-probe-spacer')?.remove();
+      return 1;
+    `;
+
+    if (!classicScrollbars) {
+      console.log(
+        `SKIP  Controprova (\`scrollbar-gutter: auto\`): scrollbar overlay, canale ${empty.reservedPx} px — slittamento non misurabile`
+      );
+    } else {
+      const overrideGutter = await setGutterOverride(cdp, true);
+      await cdp.eval(addSpacer);
+      await sleep(200);
+      const overflowingAuto = await cdp.eval(MEASURE);
+      await cdp.eval(removeSpacer);
+      await sleep(200);
+      const compactAuto = await cdp.eval(MEASURE);
+      const autoDeltaX = overflowingAuto.left - compactAuto.left;
+      const scrollbarWidthPx = Math.abs(autoDeltaX);
+      check(
+        'Controprova (`scrollbar-gutter: auto`): il pulsante slitta davvero di una scrollbar',
+        overrideGutter === 'auto' &&
+          !compactAuto.overflowing &&
+          overflowingAuto.overflowing &&
+          autoDeltaX < 0 &&
+          scrollbarWidthPx >= MIN_RESERVED_GUTTER_PX,
+        `left compatto ${compactAuto.left.toFixed(4)} px vs traboccante ${overflowingAuto.left.toFixed(4)} px (Δ ${autoDeltaX.toFixed(6)} px ≈ ${scrollbarWidthPx.toFixed(1)} px di scrollbar)`
+      );
+    }
+    await setGutterOverride(cdp, false);
+    await cdp.eval(removeSpacer);
 
     /* --- 4) Ripristino della direttiva: X tornata al valore stabile ------- */
     const restoredGutter = await setGutterOverride(cdp, false);

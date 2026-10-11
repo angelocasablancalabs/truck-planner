@@ -13,6 +13,7 @@ import type {
 import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
+import { ItemInspector } from './components/ItemInspector';
 import { PrintReport } from './components/PrintReport';
 import { isPickerAbortError, saveProjectWithHandle } from './utils/fileStorage';
 import {
@@ -810,8 +811,11 @@ export default function App() {
         id="screen-app"
         className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans print:hidden"
       >
-        {/* Sinistra: Telaio Camion */}
-        <div className="flex-1 h-full">
+        {/* Sinistra: Telaio Camion.
+            `relative`: àncora il floating HUD dei colli selezionati (ItemInspector)
+            all'area del canvas, senza consumare larghezza di layout — requisito
+            indispensabile in ottica multi-pianale (fino a 3 camion affiancati). */}
+        <div className="flex-1 h-full relative">
           <TruckCanvas
             vehicle={vehicle}
             items={items}
@@ -829,6 +833,23 @@ export default function App() {
             onBeginHistoryGesture={handleBeginHistoryGesture}
             onCommitHistoryGesture={handleCommitHistoryGesture}
           />
+
+          {/* Floating HUD: cruscotto di modifica dei colli selezionati, visibile
+              solo con selezione attiva. Sostituisce il vecchio pannello azzurro
+              della sidebar destra, che provocava un layout shift continuo. */}
+          {selectedItems.length > 0 && (
+            <ItemInspector
+              selectedItems={selectedItems}
+              vehicle={vehicle}
+              notes={notes}
+              onUpdateItemProperties={handleUpdateItemProperties}
+              onRotateSelected={handleRotateSelected}
+              onDockSelected={handleDockSelected}
+              onDeleteSelected={handleDeleteSelected}
+              onAddNote={handleAddNote}
+              onDeselect={() => setSelectedItemIds([])}
+            />
+          )}
         </div>
 
         {/* Destra: Plancia di Comando */}
@@ -844,10 +865,6 @@ export default function App() {
             isProjectSaved={isProjectSaved}
             savedFileName={savedFileName}
             onAddItem={handleAddItem}
-            onRotateSelected={handleRotateSelected}
-            onDockSelected={handleDockSelected}
-            onDeleteSelected={handleDeleteSelected}
-            onUpdateItemProperties={handleUpdateItemProperties}
             onAddBatch={handleAddBatch}
             onClearAll={handleClearAll}
             canUndo={canUndo}
@@ -856,10 +873,8 @@ export default function App() {
             onRedo={handleRedo}
             notes={notes}
             selectedNoteId={selectedNoteId}
-            onAddNote={handleAddNote}
             onUpdateNote={handleUpdateNote}
             onDeleteNote={handleDeleteNote}
-            selectedItems={selectedItems}
             items={items}
             labelDensity={labelDensity}
           />

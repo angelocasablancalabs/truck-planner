@@ -16,6 +16,36 @@
   display: none;
 }
 
+/* ==========================================================================
+   FLOATING ITEM INSPECTOR — CRUSCOTTO FLUTTUANTE DEI COLLI SELEZIONATI
+   --------------------------------------------------------------------------
+   La card vive sopra il canvas (`absolute top-4 left-4 z-20`) e non dentro la
+   sidebar di destra: la sua comparsa non deve quindi produrre alcun layout
+   shift nel Riepilogo Stiva. Una breve dissolvenza con micro-scivolamento
+   verso il basso evita l'apparizione a scatto.
+   ========================================================================== */
+
+@keyframes item-inspector-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.item-inspector {
+  animation: item-inspector-in 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item-inspector {
+    animation: none;
+  }
+}
+
 /* Foglio A4 verticale con margini puliti. */
 @page {
   size: A4 portrait;

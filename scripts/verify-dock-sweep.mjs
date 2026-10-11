@@ -17,7 +17,7 @@
  *       `ArrowRight` → `X = 137` e `X = 193.5` (Δ esatto +137, a battuta sulla
  *       parete da 250 cm), `ArrowLeft` → ritorno a `X = 0` / `X = 56.5`,
  *       `Ctrl + Z` → l'azione è annullata;
- *    3. Pulsanti della sidebar `Spingi a SX` / `Spingi a DX` con la stessa
+ *    3. Pulsanti della card fluttuante `Spingi a SX` / `Spingi a DX` con la stessa
  *       fisica delle frecce;
  *    4. Ostacolo a `X = 200`: la spinta a destra si arresta **a filo** e la
  *       verifica di collisione AABB su tutte le coppie resta falsa;
@@ -493,11 +493,14 @@ const main = async () => {
         title: b.getAttribute('title'),
         text: b.textContent.trim(),
         hasIcon: !!b.querySelector('svg'),
-        inPanel: !!b.closest('.bg-blue-50'),
+        // Dopo il refactoring UX il cruscotto dei colli selezionati è la card
+        // fluttuante ItemInspector sopra il canvas, non più il pannello
+        // azzurro dentro la sidebar destra.
+        inPanel: !!b.closest('#item-inspector'),
       }));
     `);
     check(
-      'Sidebar: i due pulsanti `Spingi a SX` / `Spingi a DX` sono nel pannello del collo selezionato, con icona',
+      'Floating HUD: i due pulsanti `Spingi a SX` / `Spingi a DX` sono nella card del collo selezionato, con icona',
       buttons.length === 2 &&
         buttons[0].text.includes('Spingi a SX') &&
         buttons[1].text.includes('Spingi a DX') &&
@@ -585,7 +588,7 @@ const main = async () => {
     after = await cdp.eval(`return window.__items();`);
     byId = Object.fromEntries(after.map((i) => [i.id, i]));
     check(
-      'Sidebar: `Spingi a DX` → 137 / 193.5 e `Spingi a SX` → 0 / 56.5 (stessa fisica delle frecce)',
+      'Floating HUD: `Spingi a DX` → 137 / 193.5 e `Spingi a SX` → 0 / 56.5 (stessa fisica delle frecce)',
       rightButtonOk && Math.abs(byId[cc1.id].x - 0) < 0.05 && Math.abs(byId[cc2.id].x - 56.5) < 0.05,
       `dopo DX: 137 / 193.5 = ${rightButtonOk} · dopo SX: ${byId[cc1.id].x} / ${byId[cc2.id].x}`
     );

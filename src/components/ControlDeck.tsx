@@ -12,19 +12,15 @@ import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '
 import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
 import {
-  NOTE_BORDER_COLOR,
   NOTE_DEFAULT_FONT_SIZE,
   NOTE_DEFAULT_WIDTH_CM,
   NOTE_FONT_SIZES,
-  NOTE_LANE_OFFSET_CM,
   NOTE_MAX_HEIGHT_CM,
   NOTE_MAX_WIDTH_CM,
   NOTE_MIN_HEIGHT_CM,
   NOTE_MIN_WIDTH_CM,
   NOTE_PASTEL_COLORS,
   NOTE_SIZE_STEP_CM,
-  buildNoteSeedText,
-  findFreeNoteY,
   noteCharsPerLine,
   noteGeometry,
   resolveNoteFontSize,
@@ -36,17 +32,13 @@ import {
   openProjectWithPicker,
   parseProjectFile,
 } from '../utils/fileStorage';
-import type { DockDirection } from '../utils/snapping';
 import {
   Truck,
-  RotateCw,
   Trash2,
   Plus,
   Info,
   ArrowUpDown,
   ArrowLeftRight,
-  AlignLeft,
-  AlignRight,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -143,16 +135,7 @@ interface ControlDeckProps {
   isProjectSaved: boolean;
   savedFileName: string | null;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
-  onRotateSelected: () => void;
-  /**
-   * Spinta a Battuta (Sweep Docking): spinge il blocco selezionato verso il
-   * punto cardinale richiesto, fino a filo della parete o del primo ostacolo.
-   * Condivide il motore puro con le quattro frecce della tastiera.
-   */
-  onDockSelected: (direction: DockDirection) => void;
-  onDeleteSelected: () => void;
   onClearAll: () => void;
-  onUpdateItemProperties: (target: string | string[], updates: Partial<PlacedItem>) => void;
   /**
    * Cronologia Undo / Redo: stato delle due pile e azioni esposte dal motore di
    * `App.tsx` (i micro-pulsanti dell'header e le scorciatoie le condividono).
@@ -176,18 +159,12 @@ interface ControlDeckProps {
   notes: SideNote[];
   /** Nota attualmente selezionata (null = pannello di modifica chiuso). */
   selectedNoteId: string | null;
-  /** Crea una nota laterale (eredità automatica dal collo selezionato). */
-  onAddNote: (noteData: Omit<SideNote, 'id'>) => void;
   onUpdateNote: (id: string, updates: Partial<SideNote>) => void;
   onDeleteNote: (id: string) => void;
-  selectedItems: PlacedItem[];
   items: PlacedItem[];
   /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
   labelDensity: LabelDensity;
 }
-
-/** Testo di partenza di una nota appena creata, da personalizzare. */
-const DEFAULT_NOTE_CONTENT = 'Inserisci nota operativa...';
 
 /** Etichette del selettore compatto di dimensione testo (scala 11 / 14 / 18 px). */
 const NOTE_FONT_LABELS: Record<number, string> = {
@@ -214,11 +191,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   isProjectSaved,
   savedFileName,
   onAddItem,
-  onRotateSelected,
-  onDockSelected,
-  onDeleteSelected,
   onClearAll,
-  onUpdateItemProperties,
   canUndo,
   canRedo,
   onUndo,
@@ -226,10 +199,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onAddBatch,
   notes,
   selectedNoteId,
-  onAddNote,
   onUpdateNote,
   onDeleteNote,
-  selectedItems,
   items,
   labelDensity,
 }) => {
@@ -343,25 +314,14 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     copyFeedbackTimer.current = window.setTimeout(() => setCopyFeedback('idle'), COPY_FEEDBACK_MS);
   };
 
-  // Selezione singola o multipla
-  const selectedItem = selectedItems.length === 1 ? selectedItems[0] : null;
-  const selectedIds = selectedItems.map((item) => item.id);
-  const isMultiSelection = selectedItems.length > 1;
-
-  /** Nome comune a tutti i colli selezionati ('' se divergenti). */
-  const sharedName =
-    selectedItems.length > 0 && selectedItems.every((item) => item.name === selectedItems[0].name)
-      ? selectedItems[0].name
-      : '';
-
-  /** Colore comune a tutti i colli selezionati (null se divergenti). */
-  const sharedColor =
-    selectedItems.length > 0 &&
-    selectedItems.every((item) => item.color.toLowerCase() === selectedItems[0].color.toLowerCase())
-      ? selectedItems[0].color.toLowerCase()
-      : null;
-
-  /** Nota attualmente selezionata (pannello "Nota Laterale Selezionata"). */
+  /**
+   * Nota attualmente selezionata (pannello "Nota Laterale Selezionata").
+   *
+   * La modifica dei **colli** selezionati non vive più qui: è stata estratta
+   * nella card fluttuante `ItemInspector` (Floating HUD sopra il canvas), così
+   * la sidebar di destra non subisce più alcun layout shift quando si seleziona
+   * un bancale e il Riepilogo Stiva resta perfettamente fermo.
+   */
   const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
 
   /** Limiti fisici delle card di nota (cm): gli stessi applicati dalla maniglia. */
@@ -385,41 +345,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   const selectedNoteHeight = selectedNote
     ? selectedNote.height ?? selectedNoteGeometry?.height ?? NOTE_MIN_HEIGHT_CM
     : NOTE_MIN_HEIGHT_CM;
-
-  /**
-   * Crea una nota laterale a partire dai colli selezionati, con eredità
-   * automatica di quota, testo e colore:
-   * - `x`: `vehicle.width + NOTE_LANE_OFFSET_CM` — nasce subito a **destra della
-   *   parete** del semirimorchio (poi è libera di andare ovunque in 2D);
-   * - `y`: quota minima Y della selezione (la nota si allinea alla loro altezza),
-   *   scorrita verso il basso solo se una card esistente occupa già quello spazio;
-   * - `content`: pre-popolato col nome del primo collo (es. `"PRODIVA 3S - "`),
-   *   già pronto per essere completato con l'avvertenza operativa;
-   * - `color`: l'esatto pastello di riempimento del collo selezionato;
-   * - `borderColor`: metadato storico `#94A3B8` (la card è senza bordo a riposo),
-   *   `width`: 140 cm, `fontSize`: 14 px (taglia "Media" della scala 11/14/18).
-   */
-  const handleAddSideNote = () => {
-    if (selectedItems.length === 0) return;
-
-    const anchor = selectedItems[0];
-    const draft: Omit<SideNote, 'id'> = {
-      x: vehicle.width + NOTE_LANE_OFFSET_CM,
-      y: Math.min(...selectedItems.map((item) => item.y)),
-      content: buildNoteSeedText(anchor.name) || DEFAULT_NOTE_CONTENT,
-      color: anchor.color,
-      borderColor: NOTE_BORDER_COLOR,
-      width: NOTE_DEFAULT_WIDTH_CM,
-      fontSize: NOTE_DEFAULT_FONT_SIZE,
-    };
-
-    // Spawn ordinato: se un'altra nota occupa già quello spazio, la nuova card
-    // scende di poco invece di sovrapporsi (le note esistenti non si muovono).
-    onAddNote({
-      ...draft,
-      y: findFreeNoteY(notes, { x: draft.x, y: draft.y }, draft),
-    });
-  };
 
   /**
    * Matrice colori compatta 7 colonne (famiglie) × 3 righe (sfumature):
@@ -1137,114 +1062,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           )}
         </div>
       </div>
-
-
-      {/* Azioni Rapide Oggetto Selezionato (singolo o gruppo) */}
-      {selectedItems.length > 0 && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md space-y-2.5">
-          {/* Intestazione: singolo collo oppure badge con il conteggio del gruppo */}
-          {selectedItem ? (
-            <div className="text-xs font-bold text-blue-900">
-              Selezionato: {selectedItem.name} ({selectedItem.width}×{selectedItem.length} cm)
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-blue-900">Selezionati:</span>
-              <span className="text-[11px] font-mono font-bold bg-blue-600 text-white px-2 py-0.5 rounded-full">
-                {selectedItems.length} Colli
-              </span>
-            </div>
-          )}
-
-          {/* Modifica Nome / Cliente: aggiornamento istantaneo su canvas e riepilogo */}
-          <label className="block space-y-1">
-            <span className="block text-[10px] font-bold text-blue-900/70 uppercase tracking-wider">
-              Nome / Cliente
-            </span>
-            <input
-              type="text"
-              value={selectedItem ? selectedItem.name : sharedName}
-              onChange={(e) =>
-                onUpdateItemProperties(selectedIds, { name: e.target.value })
-              }
-              placeholder={
-                isMultiSelection ? 'Assegna nome a tutti...' : 'Es. Cliente / Macchinario'
-              }
-              className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </label>
-
-          {/* Matrice colori (7 famiglie × 3 sfumature): singola o batch sul gruppo.
-              Aggiorna SOLO il riempimento: il bordo resta `#334155`. */}
-          <div className="space-y-1">
-            <span className="block text-[10px] font-bold text-blue-900/70 uppercase tracking-wider">
-              Colore
-            </span>
-            {renderColorMatrix(
-              selectedItem ? selectedItem.color : sharedColor,
-              (hex) => onUpdateItemProperties(selectedIds, { color: hex }),
-              'Colore'
-            )}
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={onRotateSelected}
-              className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm"
-              title="Oppure premi la Barra Spaziatrice"
-            >
-              <RotateCw className="w-3.5 h-3.5 text-blue-600" /> Ruota 90°
-            </button>
-            <button
-              onClick={onDeleteSelected}
-              className="flex-1 bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-800 hover:text-red-900 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition"
-              title="Oppure premi Canc"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-red-800" />
-              {isMultiSelection ? `Cancella (${selectedItems.length})` : 'Cancella'}
-            </button>
-          </div>
-
-          {/* Spinta a Battuta (Sweep Docking): porta il blocco a filo della
-              parete o del primo ostacolo incontrato, conservando la geometria
-              reciproca. Stesso motore delle quattro frecce della tastiera. */}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => onDockSelected('left')}
-              className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
-              title="Spingi a battuta a sinistra (Freccia ←)"
-            >
-              <AlignLeft className="w-3.5 h-3.5 text-slate-600" />
-              <span>Spingi a SX</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onDockSelected('right')}
-              className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
-              title="Spingi a battuta a destra (Freccia →)"
-            >
-              <AlignRight className="w-3.5 h-3.5 text-slate-600" />
-              <span>Spingi a DX</span>
-            </button>
-          </div>
-
-          {/* Nota laterale con eredità automatica: quota, titolo e colore del
-              collo selezionato vengono copiati nella nuova annotazione. */}
-          <button
-            type="button"
-            id="btn-add-side-note"
-            onClick={handleAddSideNote}
-            title={`Crea una nota laterale alla quota Y = ${Math.min(
-              ...selectedItems.map((item) => item.y)
-            )} cm, col colore di ${selectedItems[0].name}`}
-            className="w-full bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1.5 shadow-sm transition"
-          >
-            <FileText className="w-3.5 h-3.5 text-slate-500" />
-            Aggiungi Nota Laterale
-          </button>
-        </div>
-      )}
 
       {/* Pannello "Nota Laterale Selezionata": modifica titolo, testo e colore */}
       {selectedNote && (

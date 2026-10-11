@@ -390,16 +390,19 @@ const main = async () => {
       `estranei = [${actualIds.filter((id) => !expectedIds.includes(id)).join(', ') || 'nessuno'}]`
     );
 
-    // Il pannello Batch mostra il conteggio aggiornato (nessuna selezione orfana).
+    // Il cruscotto del collo selezionato è ora la card fluttuante
+    // (`ItemInspector`, Floating HUD sopra il canvas): il badge col conteggio
+    // del gruppo vive lì e deve riportare i soli colli del lasso.
     const batchLabel = await cdp.eval(`
-      const deck = document.querySelector('.control-deck');
-      const badge = Array.from(deck.querySelectorAll('span')).find(
+      const card = document.getElementById('item-inspector');
+      if (!card) return -1;
+      const badge = Array.from(card.querySelectorAll('span')).find(
         (el) => /^\\s*\\d+ Colli\\s*$/.test(el.textContent || '')
       );
       return badge ? Number(/\\d+/.exec(badge.textContent)[0]) : -1;
     `);
     check(
-      'Sidebar allineata: badge batch con il conteggio dei soli colli del lasso',
+      'Floating HUD allineato: badge col conteggio dei soli colli del lasso',
       batchLabel === LASSO_TARGET_COUNT,
       `badge = ${batchLabel} Colli`
     );
