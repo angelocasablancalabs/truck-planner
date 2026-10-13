@@ -16,9 +16,13 @@ import { AlignLeft, AlignRight, FileText, RotateCw, Trash2, X } from 'lucide-rea
  * ITEM INSPECTOR — CRUSCOTTO DEI COLLI SELEZIONATI (FLOATING HUD)
  *
  * Il cruscotto di modifica dei colli selezionati non vive più dentro la sidebar
- * di destra: è una **card fluttuante** ancorata in alto a sinistra dell'area del
- * canvas (`absolute top-4 left-4 z-20`), visibile esclusivamente quando c'è
- * almeno un collo selezionato.
+ * di destra: è una **card fluttuante** che `App.tsx` impila nella colonna HUD
+ * ancorata in alto a sinistra dell'area del canvas (`absolute top-4 left-4 z-20
+ * flex flex-col gap-2.5`), visibile esclusivamente quando c'è almeno un collo
+ * selezionato. Il posizionamento assoluto è quindi del **container**, non di
+ * questa card: qui resta solo `w-full`, così la card occupa la larghezza della
+ * colonna e può convivere con `NoteInspector` (la nota selezionata appare come
+ * appendice subito sotto).
  *
  * Perché: il vecchio pannello azzurro in `ControlDeck` spingeva verso il basso
  * il Riepilogo Stiva a ogni selezione (layout shift continuo) e affollava la
@@ -175,7 +179,7 @@ export const ItemInspector: React.FC<ItemInspectorProps> = ({
       /* `stopPropagation` sul pointerdown: la card galleggia sopra il canvas,
          quindi nessun gesto di pan / lasso / drag può partire da qui. */
       onPointerDown={(e) => e.stopPropagation()}
-      className="item-inspector absolute top-4 left-4 z-20 w-72 md:w-80 bg-white/95 backdrop-blur-xs border border-slate-300 rounded-lg shadow-lg p-3.5 space-y-3 font-sans text-slate-800 transition-all select-none"
+      className="item-inspector pointer-events-auto w-full bg-white/95 backdrop-blur-xs border border-slate-300 rounded-lg shadow-lg p-3.5 space-y-3 font-sans text-slate-800 transition-all select-none"
     >
       {/* --- Intestazione: collo singolo oppure badge col conteggio del gruppo --- */}
       <div className="flex items-start justify-between gap-2">

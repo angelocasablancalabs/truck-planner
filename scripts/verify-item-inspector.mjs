@@ -3,8 +3,11 @@
  *
  *  Il cruscotto di modifica dei colli selezionati è stato **estratto** dalla
  *  sidebar destra (`ControlDeck`) e incapsulato in una **card fluttuante**
- *  (`src/components/ItemInspector.tsx`) ancorata in alto a sinistra dell'area
- *  del canvas (`absolute top-4 left-4 z-20`), visibile solo con selezione attiva.
+ *  (`src/components/ItemInspector.tsx`), impilata nella colonna HUD ancorata in
+ *  alto a sinistra dell'area del canvas (`absolute top-4 left-4 z-20`), visibile
+ *  solo con selezione attiva. La nota laterale in editing (`NoteInspector`) è
+ *  l'appendice di quella colonna: verificata a parte da
+ *  `scripts/verify-note-inspector-hud.mjs`.
  *
  *  Controlli:
  *    1. STATO DI RIPOSO (0 colli): nessuna card fluttuante e nessun pannello
@@ -347,6 +350,8 @@ const main = async () => {
       const canvas = document.querySelector('.canvas-hud').parentElement.getBoundingClientRect();
       const r = el ? el.getBoundingClientRect() : null;
       const style = el ? getComputedStyle(el) : null;
+      const panel = el ? el.parentElement : null;
+      const panelStyle = panel ? getComputedStyle(panel) : null;
       return {
         inspector: !!el,
         items: window.__items().length,
@@ -356,6 +361,10 @@ const main = async () => {
         offsetTop: r ? Math.round(r.top - canvas.top) : null,
         zIndex: style ? style.zIndex : null,
         position: style ? style.position : null,
+        panelZ: panelStyle ? panelStyle.zIndex : null,
+        panelPosition: panelStyle ? panelStyle.position : null,
+        panelPointer: panelStyle ? panelStyle.pointerEvents : null,
+        cardPointer: style ? style.pointerEvents : null,
         backdrop: style ? style.backdropFilter : null,
         animation: style ? style.animationName : null,
         animationMs: style ? style.animationDuration : null,
@@ -381,9 +390,12 @@ const main = async () => {
       `left ${afterAdd.offsetLeft}px, top ${afterAdd.offsetTop}px`
     );
     check(
-      'La card è sopra il canvas (z-20) e in posizione assoluta',
-      afterAdd.position === 'absolute' && afterAdd.zIndex === '20',
-      `position ${afterAdd.position}, z-index ${afterAdd.zIndex}`
+      'La colonna HUD che ospita la card è assoluta a z-20 e trasparente ai pointer',
+      afterAdd.panelPosition === 'absolute' &&
+        afterAdd.panelZ === '20' &&
+        afterAdd.panelPointer === 'none' &&
+        afterAdd.cardPointer === 'auto',
+      `${afterAdd.panelPosition} · z${afterAdd.panelZ} · pointer-events ${afterAdd.panelPointer} → ${afterAdd.cardPointer}`
     );
     check(
       'La card usa il vetro smerigliato (backdrop-blur-xs)',
@@ -523,12 +535,15 @@ const main = async () => {
       note.text
     );
     check(
-      'Creando la nota la card fluttuante si chiude (selezione colli azzerata)',
-      note.inspector === false && note.selected === 0
+      'Creando la nota la card del collo resta aperta e la nota appare come appendice',
+      note.inspector === true &&
+        note.selected === 1 &&
+        (await cdp.eval(`return !!document.getElementById('note-inspector');`)) === true
     );
     check(
-      'Il pannello "Nota Laterale Selezionata" resta nella sidebar destra',
-      await cdp.eval(`return !!document.querySelector('#note-content-input');`)
+      'Il pannello "Nota Laterale Selezionata" vive nel floating HUD, non nella sidebar',
+      (await cdp.eval(`return !!document.querySelector('#note-inspector #note-content-input');`)) === true &&
+        (await cdp.eval(`return !!document.querySelector('.control-deck #note-content-input');`)) === false
     );
 
     /* =================================================================== *

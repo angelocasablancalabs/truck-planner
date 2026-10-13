@@ -14,6 +14,7 @@ import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { ItemInspector } from './components/ItemInspector';
+import { NoteInspector } from './components/NoteInspector';
 import { PrintReport } from './components/PrintReport';
 import { isPickerAbortError, saveProjectWithHandle } from './utils/fileStorage';
 import {
@@ -625,7 +626,16 @@ export default function App() {
     if (id !== null) setSelectedItemIds([]);
   }, []);
 
-  /** Crea una nota laterale e la mette subito in editing nella sidebar. */
+  /**
+   * Crea una nota laterale e la mette subito in editing nel floating HUD.
+   *
+   * La selezione dei **colli non viene azzerata**: una nota generata con
+   * "Aggiungi Nota Laterale" nasce come *appendice* sotto la card del collo
+   * (`ItemInspector` + `NoteInspector` impilati nella colonna HUD di sinistra),
+   * così l'operatore continua a vedere il bancale da cui la nota deriva. La
+   * selezione dei colli resta invece esclusiva quando si clicca una nota sul
+   * canvas (`handleSelectNote`).
+   */
   const handleAddNote = useCallback(
     (noteData: Omit<SideNote, 'id'>) => {
       const newNote: SideNote = {
@@ -636,7 +646,6 @@ export default function App() {
       pushSnapshot(captureSnapshot());
       setNotes((prev) => [...prev, newNote]);
       setSelectedNoteId(newNote.id);
-      setSelectedItemIds([]);
     },
     [pushSnapshot, captureSnapshot]
   );
@@ -804,6 +813,10 @@ export default function App() {
     .map((id) => items.find((item) => item.id === id))
     .filter((item): item is PlacedItem => item !== undefined);
 
+  // Nota attualmente selezionata: alimenta la card "Nota Laterale Selezionata"
+  // nel floating HUD di sinistra (null = card chiusa).
+  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
+
   return (
     <>
       {/* Interfaccia interattiva: nascosta integralmente in fase di stampa. */}
@@ -812,9 +825,11 @@ export default function App() {
         className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans print:hidden"
       >
         {/* Sinistra: Telaio Camion.
-            `relative`: àncora il floating HUD dei colli selezionati (ItemInspector)
-            all'area del canvas, senza consumare larghezza di layout — requisito
-            indispensabile in ottica multi-pianale (fino a 3 camion affiancati). */}
+            `relative`: àncora la colonna HUD fluttuante (`ItemInspector` per i
+            colli selezionati e, come appendice, `NoteInspector` per la nota in
+            editing) all'area del canvas, senza consumare larghezza di layout —
+            requisito indispensabile in ottica multi-pianale (fino a 3 camion
+            affiancati). */}
         <div className="flex-1 h-full relative">
           <TruckCanvas
             vehicle={vehicle}
@@ -834,21 +849,36 @@ export default function App() {
             onCommitHistoryGesture={handleCommitHistoryGesture}
           />
 
-          {/* Floating HUD: cruscotto di modifica dei colli selezionati, visibile
-              solo con selezione attiva. Sostituisce il vecchio pannello azzurro
-              della sidebar destra, che provocava un layout shift continuo. */}
-          {selectedItems.length > 0 && (
-            <ItemInspector
-              selectedItems={selectedItems}
-              vehicle={vehicle}
-              notes={notes}
-              onUpdateItemProperties={handleUpdateItemProperties}
-              onRotateSelected={handleRotateSelected}
-              onDockSelected={handleDockSelected}
-              onDeleteSelected={handleDeleteSelected}
-              onAddNote={handleAddNote}
-              onDeselect={() => setSelectedItemIds([])}
-            />
+          {/* Floating HUD: colonna di sinistra con il cruscotto dei colli
+              selezionati e, come appendice subito sotto, la nota laterale in
+              editing. Il container è `pointer-events-none` (i click sulle aree
+              vuote arrivano comunque al canvas), mentre le card al suo interno
+              sono `pointer-events-auto`. Sostituisce il vecchio pannello della
+              sidebar destra, che provocava un layout shift a ogni selezione. */}
+          {(selectedItems.length > 0 || selectedNote !== null) && (
+            <div className="absolute top-4 left-4 z-20 flex flex-col gap-2.5 w-72 md:w-80 pointer-events-none max-h-[calc(100vh-2rem)] overflow-y-auto pr-1">
+              {selectedItems.length > 0 && (
+                <ItemInspector
+                  selectedItems={selectedItems}
+                  vehicle={vehicle}
+                  notes={notes}
+                  onUpdateItemProperties={handleUpdateItemProperties}
+                  onRotateSelected={handleRotateSelected}
+                  onDockSelected={handleDockSelected}
+                  onDeleteSelected={handleDeleteSelected}
+                  onAddNote={handleAddNote}
+                  onDeselect={() => setSelectedItemIds([])}
+                />
+              )}
+              {selectedNote && (
+                <NoteInspector
+                  note={selectedNote}
+                  onUpdateNote={handleUpdateNote}
+                  onDeleteNote={handleDeleteNote}
+                  onDeselect={() => setSelectedNoteId(null)}
+                />
+              )}
+            </div>
           )}
         </div>
 
@@ -872,9 +902,6 @@ export default function App() {
             onUndo={handleUndo}
             onRedo={handleRedo}
             notes={notes}
-            selectedNoteId={selectedNoteId}
-            onUpdateNote={handleUpdateNote}
-            onDeleteNote={handleDeleteNote}
             items={items}
             labelDensity={labelDensity}
           />

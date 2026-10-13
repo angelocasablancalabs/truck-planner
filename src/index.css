@@ -17,12 +17,15 @@
 }
 
 /* ==========================================================================
-   FLOATING ITEM INSPECTOR — CRUSCOTTO FLUTTUANTE DEI COLLI SELEZIONATI
+   FLOATING HUD DI SINISTRA — ITEM INSPECTOR + NOTE INSPECTOR
    --------------------------------------------------------------------------
-   La card vive sopra il canvas (`absolute top-4 left-4 z-20`) e non dentro la
-   sidebar di destra: la sua comparsa non deve quindi produrre alcun layout
-   shift nel Riepilogo Stiva. Una breve dissolvenza con micro-scivolamento
-   verso il basso evita l'apparizione a scatto.
+   Le card vivono sopra il canvas, impilate nella colonna
+   `absolute top-4 left-4 z-20 flex flex-col gap-2.5` di `App.tsx`, e non dentro
+   la sidebar di destra: la loro comparsa non deve quindi produrre alcun layout
+   shift nel Riepilogo Stiva. Una breve dissolvenza con micro-scivolamento verso
+   il basso evita l'apparizione a scatto, sia per il cruscotto dei colli
+   selezionati (`.item-inspector`) sia per la nota laterale in editing
+   (`.note-inspector`), che appare come appendice subito sotto.
    ========================================================================== */
 
 @keyframes item-inspector-in {
@@ -36,12 +39,14 @@
   }
 }
 
-.item-inspector {
+.item-inspector,
+.note-inspector {
   animation: item-inspector-in 140ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .item-inspector {
+  .item-inspector,
+  .note-inspector {
     animation: none;
   }
 }

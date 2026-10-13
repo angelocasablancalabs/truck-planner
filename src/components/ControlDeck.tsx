@@ -11,20 +11,6 @@ import type {
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '../constants';
 import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
-import {
-  NOTE_DEFAULT_FONT_SIZE,
-  NOTE_DEFAULT_WIDTH_CM,
-  NOTE_FONT_SIZES,
-  NOTE_MAX_HEIGHT_CM,
-  NOTE_MAX_WIDTH_CM,
-  NOTE_MIN_HEIGHT_CM,
-  NOTE_MIN_WIDTH_CM,
-  NOTE_PASTEL_COLORS,
-  NOTE_SIZE_STEP_CM,
-  noteCharsPerLine,
-  noteGeometry,
-  resolveNoteFontSize,
-} from '../utils/sideNotes';
 import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
 import {
   isOpenPickerSupported,
@@ -46,7 +32,6 @@ import {
   Printer,
   Download,
   FolderOpen,
-  FileText,
   Undo2,
   Redo2,
 } from 'lucide-react';
@@ -155,30 +140,14 @@ interface ControlDeckProps {
     name?: string,
     color?: string
   ) => void;
-  /** Note laterali presenti sul pianale (corsia a destra della parete). */
+  /** Note laterali presenti sul pianale: servono allo snapshot PNG (e alla
+   *  scheda A4), non più a un pannello di modifica — l'editing vive nel
+   *  floating `NoteInspector` sopra il canvas. */
   notes: SideNote[];
-  /** Nota attualmente selezionata (null = pannello di modifica chiuso). */
-  selectedNoteId: string | null;
-  onUpdateNote: (id: string, updates: Partial<SideNote>) => void;
-  onDeleteNote: (id: string) => void;
   items: PlacedItem[];
   /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
   labelDensity: LabelDensity;
 }
-
-/** Etichette del selettore compatto di dimensione testo (scala 11 / 14 / 18 px). */
-const NOTE_FONT_LABELS: Record<number, string> = {
-  11: 'A-',
-  14: 'A',
-  18: 'A+',
-};
-
-/** Classi di anteprima del glifo `A` per ciascun corpo della scala. */
-const NOTE_FONT_PREVIEW_CLASS: Record<number, string> = {
-  11: 'text-[10px]',
-  14: 'text-[12px]',
-  18: 'text-[15px]',
-};
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
   vehicle,
@@ -198,9 +167,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onRedo,
   onAddBatch,
   notes,
-  selectedNoteId,
-  onUpdateNote,
-  onDeleteNote,
   items,
   labelDensity,
 }) => {
@@ -313,38 +279,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = window.setTimeout(() => setCopyFeedback('idle'), COPY_FEEDBACK_MS);
   };
-
-  /**
-   * Nota attualmente selezionata (pannello "Nota Laterale Selezionata").
-   *
-   * La modifica dei **colli** selezionati non vive più qui: è stata estratta
-   * nella card fluttuante `ItemInspector` (Floating HUD sopra il canvas), così
-   * la sidebar di destra non subisce più alcun layout shift quando si seleziona
-   * un bancale e il Riepilogo Stiva resta perfettamente fermo.
-   */
-  const selectedNote = notes.find((note) => note.id === selectedNoteId) ?? null;
-
-  /** Limiti fisici delle card di nota (cm): gli stessi applicati dalla maniglia. */
-  const clampNoteWidth = (value: number): number => {
-    const safe = Number.isFinite(value) && value > 0 ? value : NOTE_DEFAULT_WIDTH_CM;
-    return Math.max(NOTE_MIN_WIDTH_CM, Math.min(NOTE_MAX_WIDTH_CM, Math.round(safe)));
-  };
-  const clampNoteHeight = (value: number): number => {
-    const safe = Number.isFinite(value) && value > 0 ? value : NOTE_MIN_HEIGHT_CM;
-    return Math.max(NOTE_MIN_HEIGHT_CM, Math.min(NOTE_MAX_HEIGHT_CM, Math.round(safe)));
-  };
-
-  /**
-   * Geometria corrente della nota selezionata: fornisce l'altezza effettiva
-   * (auto-adattata al testo finché l'operatore non la fissa) e il corpo del
-   * testo realmente applicato nella card.
-   */
-  const selectedNoteGeometry = selectedNote ? noteGeometry(selectedNote) : null;
-  const noteFontSize = selectedNote ? resolveNoteFontSize(selectedNote) : NOTE_DEFAULT_FONT_SIZE;
-  /** Altezza mostrata nel campo H: quella esplicita, o quella misurata sul testo. */
-  const selectedNoteHeight = selectedNote
-    ? selectedNote.height ?? selectedNoteGeometry?.height ?? NOTE_MIN_HEIGHT_CM
-    : NOTE_MIN_HEIGHT_CM;
 
   /**
    * Matrice colori compatta 7 colonne (famiglie) × 3 righe (sfumature):
@@ -1062,156 +996,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           )}
         </div>
       </div>
-
-      {/* Pannello "Nota Laterale Selezionata": modifica titolo, testo e colore */}
-      {selectedNote && (
-        <div className="p-3 bg-slate-50 border border-slate-300 rounded-md space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5 text-slate-500" />
-              Nota Laterale Selezionata
-            </span>
-            <span className="text-[10px] font-mono font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded tabular-nums">
-              X {selectedNote.x.toFixed(1)} · Y {selectedNote.y.toFixed(1)} cm
-            </span>
-          </div>
-
-          {/* TESTO DELLA NOTA: unico campo libero multi-riga della card. */}
-          <label className="block space-y-1">
-            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-              Testo della Nota
-            </span>
-            <textarea
-              id="note-content-input"
-              value={selectedNote.content}
-              onChange={(e) => onUpdateNote(selectedNote.id, { content: e.target.value })}
-              rows={5}
-              placeholder="Scrivi avvertenze, cliente o note operative..."
-              className="w-full resize-y bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 leading-snug focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <span className="block text-[10px] text-slate-400 italic leading-snug">
-              Il testo va a capo da solo, su {noteCharsPerLine(selectedNote.width, noteFontSize)}{' '}
-              caratteri per riga con la dimensione attuale.
-            </span>
-          </label>
-
-          {/* Dimensione del testo: i tre corpi della scala ufficiale (11/14/18 px). */}
-          <div className="space-y-1">
-            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-              Dimensione Testo
-            </span>
-            <div
-              role="group"
-              aria-label="Dimensione testo nota"
-              className="grid grid-cols-3 gap-1 rounded bg-slate-200/70 p-1"
-            >
-              {NOTE_FONT_SIZES.map((size) => {
-                const isActive = noteFontSize === size;
-                return (
-                  <button
-                    key={size}
-                    type="button"
-                    data-font-size={size}
-                    aria-pressed={isActive}
-                    title={`Corpo del testo ${size} px`}
-                    onClick={() => onUpdateNote(selectedNote.id, { fontSize: size })}
-                    className={`rounded px-1 py-1 leading-none transition ${
-                      isActive
-                        ? 'bg-white shadow-sm font-bold text-slate-800'
-                        : 'text-slate-500 hover:text-slate-700 font-medium'
-                    }`}
-                  >
-                    <span className={NOTE_FONT_PREVIEW_CLASS[size]}>
-                      {NOTE_FONT_LABELS[size]}
-                    </span>
-                    <span className="ml-1 text-[9px] font-mono">({size}px)</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Dimensioni della casella: larghezza e altezza in cm reali. */}
-          <div className="flex gap-2">
-            <label className="flex-1 space-y-1">
-              <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                Larghezza (W cm)
-              </span>
-              <input
-                type="number"
-                id="note-width-input"
-                min={NOTE_MIN_WIDTH_CM}
-                max={NOTE_MAX_WIDTH_CM}
-                step={NOTE_SIZE_STEP_CM}
-                value={Math.round(selectedNote.width)}
-                onChange={(e) =>
-                  onUpdateNote(selectedNote.id, {
-                    width: clampNoteWidth(Number(e.target.value)),
-                  })
-                }
-                className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
-
-            <label className="flex-1 space-y-1">
-              <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                Altezza (H cm)
-              </span>
-              <input
-                type="number"
-                id="note-height-input"
-                min={NOTE_MIN_HEIGHT_CM}
-                max={NOTE_MAX_HEIGHT_CM}
-                step={NOTE_SIZE_STEP_CM}
-                value={Math.round(selectedNoteHeight)}
-                onChange={(e) =>
-                  onUpdateNote(selectedNote.id, {
-                    height: clampNoteHeight(Number(e.target.value)),
-                  })
-                }
-                className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
-          </div>
-
-          {/* Palette rapida: 7 tinte pastello + bianco neutro */}
-          <div className="space-y-1">
-            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-              Colore Sfondo
-            </span>
-            <div className="flex items-center gap-1" role="group" aria-label="Colore nota laterale">
-              {NOTE_PASTEL_COLORS.map((hex) => {
-                const isActive = selectedNote.color.toLowerCase() === hex.toLowerCase();
-                return (
-                  <button
-                    key={hex}
-                    type="button"
-                    title={hex === '#FFFFFF' ? 'Bianco neutro' : `Sfondo ${hex}`}
-                    aria-label={hex === '#FFFFFF' ? 'Bianco neutro' : `Sfondo ${hex}`}
-                    aria-pressed={isActive}
-                    onClick={() => onUpdateNote(selectedNote.id, { color: hex })}
-                    className={`w-5 h-5 rounded-sm border border-slate-300 hover:scale-110 transition cursor-pointer ${
-                      isActive ? 'ring-2 ring-blue-600' : ''
-                    }`}
-                    style={{ backgroundColor: hex }}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            id="btn-delete-note"
-            onClick={() => onDeleteNote(selectedNote.id)}
-            className="w-full bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-800 hover:text-red-900 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition"
-            title="Elimina la nota laterale (oppure premi Canc)"
-          >
-            <Trash2 className="w-3.5 h-3.5 text-red-800" />
-            Cancella Nota
-          </button>
-        </div>
-      )}
 
       {/* Statistiche del Carico */}
       <div className="space-y-2 border-t border-slate-200 pt-4">
