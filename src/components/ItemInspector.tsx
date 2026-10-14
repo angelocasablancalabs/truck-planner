@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PlacedItem, SideNote, VehicleConfig } from '../types';
+import type { DeckBay, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { COLOR_FAMILIES } from '../constants';
 import type { ColorFamily } from '../constants';
 import {
@@ -10,7 +10,8 @@ import {
   buildNoteSeedText,
   findFreeNoteY,
 } from '../utils/sideNotes';
-import { AlignLeft, AlignRight, FileText, RotateCw, Trash2, X } from 'lucide-react';
+import { bayLabel, vehicleShortName } from '../utils/bays';
+import { AlignLeft, AlignRight, Copy, FileText, RotateCw, Trash2, Truck, X } from 'lucide-react';
 
 /**
  * ITEM INSPECTOR — CRUSCOTTO DEI COLLI SELEZIONATI (FLOATING HUD)
@@ -59,10 +60,23 @@ interface ItemInspectorProps {
   vehicle: VehicleConfig;
   /** Note laterali presenti: usate dall'anti-sovrapposizione allo spawn. */
   notes: SideNote[];
+  /** Flotta della centrale: alimenta la riga di trasferimento rapido. */
+  bays: DeckBay[];
+  /** Stallo attivo: è quello da cui i colli verrebbero prelevati. */
+  activeBayId: string;
+  /** Trasferisce i colli selezionati sul primo slot libero di un altro stallo. */
+  onMoveToBay: (targetBayId: string) => void;
   /** Aggiornamento proprietà (Nome / Cliente, tinta) su uno o più colli. */
   onUpdateItemProperties: (ids: string[], updates: Partial<PlacedItem>) => void;
   /** Rotazione di 90° di tutti i colli selezionati (come la Barra Spaziatrice). */
   onRotateSelected: () => void;
+  /**
+   * **Duplica i colli selezionati**: ognuno viene ricollocato nel primo slot
+   * utile verso le Porte (`findSmartSpawnPosition`) con un ID nuovo, la selezione
+   * si sposta sui duplicati e l'intera operazione è un solo passo di Undo.
+   * Stessa azione della scorciatoia `Ctrl / Cmd + D`.
+   */
+  onDuplicateSelected: () => void;
   /** Spinta a battuta orizzontale del blocco (come le frecce ← / →). */
   onDockSelected: (direction: 'left' | 'right') => void;
   /** Eliminazione di tutti i colli selezionati (come `Canc`). */
@@ -77,8 +91,12 @@ export const ItemInspector: React.FC<ItemInspectorProps> = ({
   selectedItems,
   vehicle,
   notes,
+  bays,
+  activeBayId,
+  onMoveToBay,
   onUpdateItemProperties,
   onRotateSelected,
+  onDuplicateSelected,
   onDockSelected,
   onDeleteSelected,
   onAddNote,
@@ -237,24 +255,37 @@ export const ItemInspector: React.FC<ItemInspectorProps> = ({
         {renderColorMatrix(selectedItem ? selectedItem.color : sharedColor)}
       </div>
 
-      {/* --- Azioni rapide: rotazione e cancellazione --------------------------- */}
-      <div className="flex gap-2">
+      {/* --- Azioni rapide: rotazione, duplicazione e cancellazione -------------- */}
+      <div className="flex gap-1.5">
         <button
           type="button"
           onClick={onRotateSelected}
-          className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
+          className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-xs transition cursor-pointer"
           title="Oppure premi la Barra Spaziatrice"
         >
-          <RotateCw className="w-3.5 h-3.5 text-blue-600" /> Ruota 90°
+          <RotateCw className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span className="truncate">Ruota 90°</span>
+        </button>
+        <button
+          type="button"
+          id="btn-duplicate-selected"
+          onClick={onDuplicateSelected}
+          className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-xs transition cursor-pointer"
+          title="Duplica i colli selezionati (Ctrl / Cmd + D)"
+        >
+          <Copy className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span className="truncate">Duplica</span>
         </button>
         <button
           type="button"
           onClick={onDeleteSelected}
-          className="flex-1 bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-800 hover:text-red-900 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-sm transition cursor-pointer"
+          className="flex-1 bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-800 hover:text-red-900 text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1 shadow-xs transition cursor-pointer"
           title="Oppure premi Canc"
         >
-          <Trash2 className="w-3.5 h-3.5 text-red-800" />
-          {isMultiSelection ? `Cancella (${selectedItems.length})` : 'Cancella'}
+          <Trash2 className="w-3.5 h-3.5 text-red-800 shrink-0" />
+          <span className="truncate">
+            {isMultiSelection ? `Cancella (${selectedItems.length})` : 'Cancella'}
+          </span>
         </button>
       </div>
 
@@ -279,6 +310,39 @@ export const ItemInspector: React.FC<ItemInspectorProps> = ({
           <span>Spingi a DX</span>
         </button>
       </div>
+
+      {/* --- Spostamento Rapido tra Mezzi (Centrale Multi-Pianale) -------------
+          Un pulsante per ciascun **altro** stallo della flotta (`bays.length > 1`):
+          il click trasferisce i colli selezionati sul primo slot utile di quel
+          pianale (`findSmartSpawnPosition`, Cabina → Porte) e lo rende il Mezzo
+          Attivo. L'intero trasferimento è **un solo passo** di Undo. */}
+      {bays.length > 1 && (
+        <div className="space-y-1.5 pt-2 border-t border-slate-200">
+          <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+            Sposta su altro Mezzo
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {bays
+              .filter((bay) => bay.id !== activeBayId)
+              .map((bay) => {
+                const bayIndex = bays.findIndex((b) => b.id === bay.id);
+                return (
+                  <button
+                    key={bay.id}
+                    type="button"
+                    id={`btn-move-to-${bay.id}`}
+                    onClick={() => onMoveToBay(bay.id)}
+                    title={`Trasferisce ${isMultiSelection ? 'questi colli' : 'questo collo'} su ${bayLabel(bayIndex)} (${vehicleShortName(bay.vehicle)})`}
+                    className="flex-1 min-w-[120px] bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 text-blue-700 text-xs font-semibold py-1.5 px-2 rounded flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
+                  >
+                    <Truck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span className="truncate">➔ {bayLabel(bayIndex)}</span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      )}
 
       {/* --- Nota laterale con eredità automatica dal collo -------------------- */}
       <button

@@ -66,6 +66,7 @@ import {
   BAY_HEADER_BG_ACTIVE,
   BAY_HEADER_BORDER,
   BAY_HEADER_BORDER_ACTIVE,
+  BAY_HEADER_BOTTOM_CM,
   BAY_HEADER_HEIGHT_CM,
   BAY_HEADER_PADDING_CM,
   BAY_HEADER_TEXT,
@@ -81,6 +82,63 @@ import {
 const SELECTION_COLOR = '#2563EB';
 const LASSO_FILL = '#3B82F6';
 const LASSO_FILL_OPACITY = 0.15;
+
+/* --- DRAG OVERLAY CROSS-PIANALE ------------------------------------------- */
+
+/** Opacità della sagoma "fantasma" lasciata nello stallo di partenza. */
+const GHOST_OPACITY = 0.35;
+
+/** Tratteggio del bordo dei colli fantasma rimasti nello stallo di partenza. */
+const GHOST_DASH = '4 2';
+
+/** Opacità dei colli in transito nel canale neutro fra due stalli. */
+const TRANSIT_OPACITY = 0.75;
+
+/** Colore d'allarme del collo in transito (nessuno stallo sotto il cursore). */
+const TRANSIT_COLOR = '#F59E0B';
+
+/**
+ * Spessore (cm) del contorno di evidenziazione del pianale bersaglio. Il tratto
+ * vive alle coordinate reali del pianale, quindi cresce con lo zoom: 6 cm
+ * restano leggibili sia nella vista d'insieme della flotta sia a forte zoom.
+ */
+const DROP_HIGHLIGHT_STROKE_CM = 6;
+
+/**
+ * Colore del bordo dei **colli in movimento** del Drag Overlay: bianco puro,
+ * così il blocco trascinato resta distinto dai colli già stivati (bordo
+ * antracite `ITEM_BORDER_COLOR`) senza introdurre una terza tinta di stato —
+ * rosso = allarme, blu = selezione, ambra = transito nel canale neutro.
+ */
+const DRAG_OVERLAY_BORDER = '#FFFFFF';
+
+/**
+ * Membro sintetico del Drag Overlay.
+ *
+ * I membri del gesto vengono "congelati" al `pointerDown` con le sole misure e
+ * le coordinate di partenza; il collo vivo (nome, tinta, rotazione) può nel
+ * frattempo uscire dalla lista dello stallo di origine — accade puntualmente nel
+ * trasferimento cross-pianale, dove al rilascio il collo cambia pianale. Questo
+ * segnaposto garantisce che il disegno del blocco in movimento non dipenda mai
+ * dalla presenza del collo nella stiva corrente: il rettangolo conserva misure e
+ * geometria esatte, mentre le etichette (nome e quote) degradano con eleganza.
+ */
+const toOverlayPlaceholder = (member: {
+  id: string;
+  width: number;
+  length: number;
+}): PlacedItem => ({
+  id: member.id,
+  code: '',
+  name: '',
+  width: member.width,
+  length: member.length,
+  x: 0,
+  y: 0,
+  rotation: 0,
+  color: '#E2E8F0',
+  borderColor: '#334155',
+});
 
 /** Font di sistema delle etichette dell'header dello stallo (SVG). */
 const FONT_FAMILY_LABEL = 'Helvetica, Arial, sans-serif';
@@ -279,25 +337,34 @@ const zoomAroundPoint = (prev: ViewTransform, nextZoom: number, mouse: Point): V
  * Il gruppo è "congelato" al pointerdown: si memorizzano le posizioni di
  * partenza e si applica a tutti lo stesso delta (ΔX, ΔY), preservando le
  * posizioni relative.
+ *
+ * Dalla **Fase 2** il gesto non è più confinato al pianale di partenza: il
+ * cursore viene seguito in **coordinate di mondo** (`startCursor`), così il
+ * gruppo può attraversare il canale di 180 cm fra due stalli e agganciarsi a un
+ * altro mezzo. Per questo lo stato ricorda lo stallo di origine e la sua
+ * traslazione: servono a riportare il cursore nel sistema locale del pianale
+ * che di volta in volta si trova sotto il puntatore.
  */
 interface DragState {
   /** ID del collo afferrato dal puntatore (quello che guida lo snap). */
   primaryId: string;
+  /** Stallo a cui appartiene il gruppo trascinato (le sue coordinate sono locali). */
+  sourceBayId: string;
+  /** Traslazione orizzontale (cm) dello stallo di partenza nel mondo. */
+  sourceBayOffset: number;
   /**
-   * Traslazione orizzontale (cm) dello stallo a cui appartiene il gesto: le
-   * coordinate dei colli sono **locali**, quindi il cursore va riportato nel
-   * sistema locale dello stallo prima di calcolare delta e snap.
+   * Cursore al pointerdown in **cm di mondo** (origine = parete sinistra del
+   * primo stallo): è il riferimento unico di `deltaX` / `deltaY`, valido sia
+   * dentro il pianale di partenza sia nel canale fra due stalli.
    */
-  bayOffsetCm: number;
-  /** Cursore in cm reali **locali allo stallo** al momento del pointerdown. */
   startCursor: Point;
-  /** Posizione di partenza del collo afferrato (cm). */
+  /** Posizione di partenza del collo afferrato (cm, locali allo stallo). */
   startX: number;
   startY: number;
   primaryWidth: number;
   primaryLength: number;
-  /** `true` appena il trascinamento ha davvero spostato il gruppo (cm reali):
-   *  è la condizione con cui il gesto viene convalidato nella cronologia. */
+  /** `true` appena il trascinamento ha davvero spostato il gruppo: è la
+   *  condizione con cui il gesto viene convalidato nella cronologia. */
   moved: boolean;
   /** Tutti i membri trascinati (incluso il primario) con le posizioni iniziali. */
   members: {
@@ -307,6 +374,46 @@ interface DragState {
     width: number;
     length: number;
   }[];
+}
+
+/**
+ * Membro del **Drag Overlay**: il collo in movimento, la sua posizione di
+ * **mondo** (dove viene disegnato) e la sua posizione **locale** rispetto allo
+ * stallo che in questo istante si trova sotto il cursore (le coordinate che
+ * verranno scritte nella stiva al rilascio).
+ */
+interface DragOverlayMember {
+  item: PlacedItem;
+  /** Ascissa (cm) nel mondo: `offset dello stallo bersaglio + localX`. */
+  worldX: number;
+  /** Quota (cm) nel mondo: identica a `localY` (gli stalli non si traslano in Y). */
+  worldY: number;
+  /** Ascissa (cm) locale allo stallo bersaglio: quella che verrà salvata. */
+  localX: number;
+  /** Quota (cm) locale allo stallo bersaglio: quella che verrà salvata. */
+  localY: number;
+}
+
+/**
+ * Stato del **Drag Overlay** (livello SVG globale in testa al DOM): vive solo
+ * durante il trascinamento di colli e descrive il blocco in movimento.
+ *
+ * - `targetBayId === null` → il cursore è nel **canale di 180 cm** (o fuori
+ *   sagoma): i colli volano liberi, non agganciati, e al rilascio scatta
+ *   l'**annullamento elastico** (Opzione A: nessuna mutazione, nessun passo di
+ *   Undo).
+ * - `targetBayId === sourceBayId` → spostamento interno al pianale di partenza
+ *   (stessa fisica di snap di sempre).
+ * - `targetBayId !== sourceBayId` → **trasferimento cross-pianale**: al rilascio
+ *   il blocco passa allo stallo bersaglio, che diventa il Mezzo Attivo.
+ */
+interface DragOverlayState {
+  sourceBayId: string;
+  /** Stallo sotto il cursore, oppure `null` nel canale di 180 cm. */
+  targetBayId: string | null;
+  /** Indice dello stallo bersaglio (`-1` quando `targetBayId` è `null`). */
+  targetBayIndex: number;
+  members: DragOverlayMember[];
 }
 
 /**
@@ -379,6 +486,18 @@ interface TruckCanvasProps {
   onUpdateNoteSize: (id: string, size: { width: number; height: number }) => void;
   onUpdateItemsPos: (updates: ItemPositionUpdate[]) => void;
   /**
+   * **Trasferimento cross-pianale** (drag & drop fra due mezzi): sposta
+   * atomicamente i colli indicati dallo stallo di partenza a quello bersaglio,
+   * convertendo le `placements` (già in coordinate **locali** del bersaglio) e
+   * rendendo il bersaglio il nuovo Mezzo Attivo. L'intero gesto è **un solo
+   * passo** di Undo, convalidato dal canvas al `pointerUp`.
+   */
+  onTransferItems?: (
+    sourceBayId: string,
+    targetBayId: string,
+    placements: ItemPositionUpdate[]
+  ) => void;
+  /**
    * Cronologia Undo / Redo — Regola del Drag:
    * il canvas apre il gesto al `pointerDown` (`onBeginHistoryGesture`), non
    * registra nulla durante il `pointerMove` e lo convalida al `pointerUp`
@@ -402,6 +521,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   onUpdateNotePos,
   onUpdateNoteSize,
   onUpdateItemsPos,
+  onTransferItems,
   onBeginHistoryGesture,
   onCommitHistoryGesture,
 }) => {
@@ -411,6 +531,25 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const draggingNote = useRef<NoteDragState | null>(null);
   const resizingNote = useRef<NoteResizeState | null>(null);
   const panningView = useRef<{ start: Point; pan: Point; moved: boolean } | null>(null);
+
+  /**
+   * **Drag Overlay**: descrive il blocco di colli attualmente in movimento fra
+   * gli stalli (o nel canale neutro di 180 cm). Vive solo durante il gesto: è
+   * alimentato da `handlePointerMove` e consumato da `handlePointerUp`, che da
+   * qui ricava lo stallo bersaglio e le coordinate locali da salvare.
+   */
+  const [dragOverlay, setDragOverlay] = useState<DragOverlayState | null>(null);
+  /**
+   * Specchio del Drag Overlay in una `ref`: il `pointerUp` chiude il gesto sempre
+   * sull'**ultimo** frame calcolato, senza dipendere dal fatto che React abbia
+   * già ri-renderizzato dopo l'ultimo `pointerMove` (le due closure di evento
+   * sono indipendenti).
+   */
+  const dragOverlayRef = useRef<DragOverlayState | null>(null);
+  const applyDragOverlay = (next: DragOverlayState | null) => {
+    dragOverlayRef.current = next;
+    setDragOverlay(next);
+  };
 
   // Lasso: vertice iniziale in cm reali + rettangolo in px schermo per il disegno.
   const lassoStart = useRef<Point | null>(null);
@@ -441,6 +580,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const selectedNoteIdSet = new Set(selectedNoteId ? [selectedNoteId] : []);
   /** Set degli ID selezionati: vale per il solo stallo attivo (selezione locale). */
   const selectedIdSet = new Set(selectedItemIds);
+  /**
+   * Set degli ID che compongono il blocco in movimento (Drag Overlay): nello
+   * stallo di partenza quei colli vengono resi come **sagoma fantasma**, perché
+   * a viaggiare è la copia disegnata nel layer globale.
+   */
+  const overlayMemberIdSet = new Set(
+    (dragOverlay?.members ?? []).map((member) => member.item.id)
+  );
 
   /* ------------------------------------------------------------------------ *
    *  GEOMETRIA DELLA CENTRALE MULTI-PIANALE
@@ -838,15 +985,18 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     (e.target as Element).setPointerCapture(e.pointerId);
 
     /**
-     * Traslazione dello stallo del collo afferrato: il cursore di mondo viene
-     * riportato nel sistema **locale** dello stallo, dove vivono `item.x`/`item.y`.
+     * Stallo di partenza del gesto: il cursore viene tracciato in **cm di
+     * mondo** (origine = parete sinistra del primo stallo), mentre il delta di
+     * trascinamento viene applicato alle coordinate **locali** dei colli, che
+     * vivono in `item.x` / `item.y`.
      */
-    const bayOffsetCm = offsets[bays.findIndex((other) => other.id === bay.id)] ?? 0;
+    const sourceBayIndex = bays.findIndex((other) => other.id === bay.id);
+    const sourceBayOffset = offsets[sourceBayIndex] ?? 0;
 
     // Congela il gruppo: il drag partirà solo se il puntatore si muove davvero.
-    const memberIds = new Set(nextIds);
+    const memberIdSet = new Set(nextIds);
     const members = bay.items
-      .filter((other) => memberIds.has(other.id))
+      .filter((other) => memberIdSet.has(other.id))
       .map((other) => ({
         id: other.id,
         startX: other.x,
@@ -861,8 +1011,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     draggingItem.current = {
       primaryId: item.id,
-      bayOffsetCm,
-      startCursor: { x: cursor.x - bayOffsetCm, y: cursor.y },
+      sourceBayId: bay.id,
+      sourceBayOffset,
+      // Cursore di MONDO: da qui in poi ogni stallo sotto il puntatore si
+      // ricava per semplice sottrazione della propria traslazione.
+      startCursor: cursor,
       startX: item.x,
       startY: item.y,
       primaryWidth: item.width,
@@ -951,69 +1104,167 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       return;
     }
 
-    // 3) Trascinamento (singolo o di gruppo), sempre in centimetri reali.
-    //    Il cursore di mondo viene riportato nel sistema LOCALE dello stallo del
-    //    collo afferrato: `item.x`/`item.y` sono coordinate del pianale.
+    // 3) Trascinamento (singolo o di gruppo) — **cross-pianale**.
+    //    Il gesto non è più confinato al camion di partenza: il cursore viene
+    //    seguito in cm di mondo e, a ogni frame, si determina quale stallo della
+    //    centrale sta sotto il puntatore. Se è il pianale di origine vale la
+    //    fisica di sempre; se è un ALTRO mezzo il blocco si aggancia
+    //    magneticamente alle sue pareti e ai suoi colli; nel canale di 180 cm
+    //    fra due stalli (o fuori dalla flotta) il blocco vola libero.
     const drag = draggingItem.current;
     if (!drag) return;
     const cursor = toCanvasCm(e.clientX, e.clientY);
     if (!cursor) return;
 
-    const deltaX = cursor.x - drag.bayOffsetCm - drag.startCursor.x;
+    const deltaX = cursor.x - drag.startCursor.x;
     const deltaY = cursor.y - drag.startCursor.y;
 
-    // Colli e sagoma del mezzo a cui appartiene il gesto: lo snap magnetico non
-    // deve mai agganciarsi ai bancali di un altro stallo della centrale.
-    const dragView = bayViews.find((view) => view.bay.id === activeBay?.id) ?? bayViews[0];
-    if (!dragView) return;
-    const dragVehicle = dragView.bay.vehicle;
-    const dragItems = dragView.items;
+    // Un trascinamento diventa tale solo oltre la soglia in pixel: sotto quella
+    // distanza il gesto resta un click (nessuno spostamento, nessun fotogramma).
+    if (!drag.moved && Math.hypot(deltaX, deltaY) * zoom < DRAG_THRESHOLD_PX) return;
+    drag.moved = true;
 
-    // Il collo afferrato guida lo snap magnetico su pareti e colli esterni al
-    // gruppo; gli altri membri ricevono poi lo stesso delta.
+    // Colli e sagoma del mezzo di PARTENZA: servono al ramo di spostamento
+    // interno (il gesto non deve mai agganciarsi ai propri stessi membri).
+    const sourceView = bayViews.find((view) => view.bay.id === drag.sourceBayId) ?? bayViews[0];
+    if (!sourceView) return;
+    const sourceVehicle = sourceView.bay.vehicle;
+    const sourceItems = sourceView.items;
     const groupIds = new Set(drag.members.map((member) => member.id));
+    const primaryMember =
+      drag.members.find((member) => member.id === drag.primaryId) ?? drag.members[0];
+    if (!primaryMember) return;
+
+    // Sagoma orizzontale di uno stallo nel mondo: `offset ≤ X ≤ offset + width`.
+    const hoveredBayView =
+      bayViews.find(
+        (view) => cursor.x >= view.offset && cursor.x <= view.offset + view.bay.vehicle.width
+      ) ?? null;
+
+    /* --- Caso A: il cursore è nel canale di 180 cm (o fuori dalla flotta) ---
+     * Nessuno snap: il blocco segue il puntatore in coordinate di mondo e, al
+     * rilascio, l'operazione viene **annullata elasticamente** (Opzione A). */
+    if (!hoveredBayView) {
+      applyDragOverlay({
+        sourceBayId: drag.sourceBayId,
+        targetBayId: null,
+        targetBayIndex: -1,
+        members: drag.members.map((member) => {
+          // Quota di sicurezza: i colli non escono mai dalla fascia verticale
+          // del layout (Cabina in alto, buffer di sforamento posteriore in basso).
+          const worldY = Math.max(
+            0,
+            Math.min(layoutLength + REAR_OVERHANG_LIMIT - member.length, member.startY + deltaY)
+          );
+          return {
+            item: sourceItems.find((item) => item.id === member.id) ?? toOverlayPlaceholder(member),
+            worldX: drag.sourceBayOffset + member.startX + deltaX,
+            worldY,
+            localX: member.startX + deltaX,
+            localY: worldY,
+          };
+        }),
+      });
+      return;
+    }
+
+    /* --- Caso B: il cursore è dentro la sagoma di uno stallo ---------------- */
+    const targetVehicle = hoveredBayView.bay.vehicle;
+    const isSameBay = hoveredBayView.bay.id === drag.sourceBayId;
+
+    // Coordinate LOCALI proposte per il membro primario nello stallo bersaglio.
+    const proposedLocalX =
+      drag.sourceBayOffset + primaryMember.startX + deltaX - hoveredBayView.offset;
+    const proposedLocalY = primaryMember.startY + deltaY;
+
+    // Snap magnetico su pareti e colli dello stallo bersaglio. Nello stallo di
+    // partenza i membri del gruppo vengono esclusi (non si agganciano a se
+    // stessi); su un altro mezzo l'esclusione è superflua ma innocua.
     const snapped = calculateSnapPosition(
-      drag.startX + deltaX,
-      drag.startY + deltaY,
-      drag.primaryWidth,
-      drag.primaryLength,
-      dragVehicle,
-      dragItems.filter((other) => !groupIds.has(other.id))
+      proposedLocalX,
+      proposedLocalY,
+      primaryMember.width,
+      primaryMember.length,
+      targetVehicle,
+      hoveredBayView.items.filter((other) => !groupIds.has(other.id))
     );
 
-    let dx = snapped.x - drag.startX;
-    let dy = snapped.y - drag.startY;
+    // Il blocco è RIGIDO: lo scarto fra posizione agganciata e posizione grezza
+    // vale per tutti i membri, quindi le posizioni relative non cambiano mai.
+    const snapDx = snapped.x - proposedLocalX;
+    const snapDy = snapped.y - proposedLocalY;
 
-    // Clamping del delta: TUTTO il gruppo deve restare nella sagoma consentita
-    // (pareti laterali rigide, cabina rigida, buffer posteriore di overhang).
-    let dxMin = -Infinity;
-    let dxMax = Infinity;
-    let dyMin = -Infinity;
-    let dyMax = Infinity;
+    const rawLocalX = (member: { startX: number }): number =>
+      drag.sourceBayOffset + member.startX + deltaX - hoveredBayView.offset + snapDx;
+    const rawLocalY = (member: { startY: number }): number => member.startY + deltaY + snapDy;
+
+    // Clamping di gruppo: TUTTO il blocco deve rientrare nella sagoma del mezzo
+    // bersaglio (pareti laterali e Cabina rigide, sforamento posteriore
+    // consentito fino al buffer). Lo scarto è unico, quindi la geometria
+    // reciproca resta intatta.
+    let localDxMin = -Infinity;
+    let localDxMax = Infinity;
+    let localDyMin = -Infinity;
+    let localDyMax = Infinity;
 
     for (const member of drag.members) {
-      dxMin = Math.max(dxMin, -member.startX);
-      dxMax = Math.min(dxMax, dragVehicle.width - member.width - member.startX);
-      dyMin = Math.max(dyMin, -member.startY);
-      dyMax = Math.min(
-        dyMax,
-        dragVehicle.length + REAR_OVERHANG_LIMIT - member.length - member.startY
+      if (isSameBay) {
+        // Stallo di partenza: si conserva esattamente la fisica storica, che
+        // lavora sul delta invece che sulla posizione assoluta.
+        localDxMin = Math.max(localDxMin, -member.startX);
+        localDxMax = Math.min(localDxMax, sourceVehicle.width - member.width - member.startX);
+        localDyMin = Math.max(localDyMin, -member.startY);
+        localDyMax = Math.min(
+          localDyMax,
+          sourceVehicle.length + REAR_OVERHANG_LIMIT - member.length - member.startY
+        );
+      } else {
+        localDxMin = Math.max(localDxMin, -rawLocalX(member));
+        localDxMax = Math.min(localDxMax, targetVehicle.width - member.width - rawLocalX(member));
+        localDyMin = Math.max(localDyMin, -rawLocalY(member));
+        localDyMax = Math.min(
+          localDyMax,
+          targetVehicle.length + REAR_OVERHANG_LIMIT - member.length - rawLocalY(member)
+        );
+      }
+    }
+
+    const groupDx = localDxMin <= localDxMax ? Math.max(localDxMin, Math.min(localDxMax, 0)) : 0;
+    const groupDy = localDyMin <= localDyMax ? Math.max(localDyMin, Math.min(localDyMax, 0)) : 0;
+
+    const overlayMembers: DragOverlayMember[] = drag.members.map((member) => {
+      const localX = rawLocalX(member) + groupDx;
+      const localY = rawLocalY(member) + groupDy;
+      return {
+        item: sourceItems.find((item) => item.id === member.id) ?? toOverlayPlaceholder(member),
+        worldX: hoveredBayView.offset + localX,
+        worldY: localY,
+        localX,
+        localY,
+      };
+    });
+
+    // Spostamento interno allo stallo di partenza: la stiva viene aggiornata
+    // **live** come nel drag storico (un solo passo di Undo al rilascio). Nel
+    // trasferimento cross-pianale, invece, nulla viene mutato finché il
+    // puntatore non viene rilasciato su un bersaglio valido: nessuna stiva
+    // intermedia da dover riparare se il gesto finisce nel canale neutro.
+    if (isSameBay) {
+      onUpdateItemsPos(
+        overlayMembers.map((member) => ({
+          id: member.item.id,
+          x: toPrecision(member.localX),
+          y: toPrecision(member.localY),
+        }))
       );
     }
 
-    if (dxMin <= dxMax) dx = Math.max(dxMin, Math.min(dxMax, dx));
-    if (dyMin <= dyMax) dy = Math.max(dyMin, Math.min(dyMax, dy));
-
-    // Spostamento reale: il gesto avrà diritto a un passo di Undo al rilascio.
-    if (dx !== 0 || dy !== 0) drag.moved = true;
-
-    const updates: ItemPositionUpdate[] = drag.members.map((member) => ({
-      id: member.id,
-      x: toPrecision(member.startX + dx),
-      y: toPrecision(member.startY + dy),
-    }));
-
-    onUpdateItemsPos(updates);
+    applyDragOverlay({
+      sourceBayId: drag.sourceBayId,
+      targetBayId: hoveredBayView.bay.id,
+      targetBayIndex: hoveredBayView.index,
+      members: overlayMembers,
+    });
   };
 
   /**
@@ -1098,14 +1349,50 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     if (panningView.current?.moved) suppressBackgroundClick.current = true;
 
-    // Trascinamento di colli concluso: l'intero gesto entra in cronologia come
-    // UN solo passo (e solo se ha davvero spostato qualcosa).
+    /* --- Chiusura del trascinamento di colli -------------------------------- *
+     *  L'intero gesto entra in cronologia come **UN solo passo**, e solo se ha
+     *  davvero prodotto una mutazione:
+     *   - rilascio su un ALTRO mezzo  → trasferimento atomico cross-pianale;
+     *   - rilascio sullo stesso mezzo → posizioni già aggiornate live, si
+     *     convalida il fotogramma;
+     *   - rilascio nel canale di 180 cm (Opzione A) → **annullamento elastico**:
+     *     nessuna mutazione è mai avvenuta (la stiva non è stata toccata durante
+     *     il transito), i colli rientrano da soli alla posizione di partenza e
+     *     nessun passo viene aggiunto alla cronologia.
+     * ------------------------------------------------------------------------ */
     const itemDrag = draggingItem.current;
-    if (itemDrag) onCommitHistoryGesture(itemDrag.moved);
+    const overlay = dragOverlayRef.current;
+
+    if (itemDrag) {
+      if (itemDrag.moved && overlay && overlay.targetBayId !== null) {
+        if (overlay.targetBayId !== overlay.sourceBayId) {
+          // TRASFERIMENTO TRA MEZZI DIVERSI: un solo aggiornamento atomico, con
+          // le coordinate già convertite nel sistema locale del bersaglio.
+          const placements: ItemPositionUpdate[] = overlay.members.map((member) => ({
+            id: member.item.id,
+            x: toPrecision(member.localX),
+            y: toPrecision(member.localY),
+          }));
+          onTransferItems?.(overlay.sourceBayId, overlay.targetBayId, placements);
+        }
+        // Spostamento interno allo stallo di partenza: le posizioni sono già in
+        // scena (aggiornate live durante il `pointerMove`), resta da convalidare
+        // il fotogramma aperto al `pointerDown`.
+        onCommitHistoryGesture(true);
+        // Il rilascio non è un click sullo sfondo: la selezione (che segue i
+        // colli appena trasferiti) non deve essere azzerata.
+        suppressBackgroundClick.current = true;
+      } else {
+        // Click puro oppure rilascio nel canale di 180 cm: nessun passo di Undo.
+        onCommitHistoryGesture(false);
+      }
+      setDragOverlay(null);
+      dragOverlayRef.current = null;
+      draggingItem.current = null;
+    }
 
     panningView.current = null;
     setIsPanning(false);
-    draggingItem.current = null;
   };
 
   // --- Zoom da pulsanti HUD (ancorato al centro del viewport) ---------------
@@ -1749,6 +2036,13 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
               {/* Rendering dei Colli Stivati — coordinate = cm reali del pianale */}
               {view.items.map((item) => {
                 const isSelected = selectedIdSet.has(item.id);
+                /**
+                 * Collo che appartiene al blocco in movimento (Drag Overlay):
+                 * nello stallo di partenza resta come **sagoma fantasma**
+                 * (`opacity 0.35`, bordo tratteggiato), perché a viaggiare è la
+                 * copia disegnata nel layer globale `#canvas-drag-overlay`.
+                 */
+                const isGhost = overlayMemberIdSet.has(item.id);
                 // Allarme: collisione con altri colli OPPURE sforamento della
                 // sagoma utile (es. accodamento oltre le porte posteriori).
                 const alert = hasCollision(item, view.items) || isOutOfBounds(item, view.bay.vehicle);
@@ -1773,6 +2067,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                     onPointerDown={(e) => handlePointerDown(item, view.bay, e)}
                     onClick={(e) => e.stopPropagation()}
                     className="cursor-move transition-shadow"
+                    opacity={isGhost ? GHOST_OPACITY : 1}
                   >
                     <rect
                       width={item.width}
@@ -1780,10 +2075,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                       fill={item.color}
                       stroke={outerStroke}
                       strokeWidth={outerStrokeWidth}
+                      strokeDasharray={isGhost ? GHOST_DASH : undefined}
                       rx={2}
-                      className={isSelected ? 'filter drop-shadow-lg' : ''}
+                      className={isSelected && !isGhost ? 'filter drop-shadow-lg' : ''}
                     />
-                    {alert && isSelected && (
+                    {alert && isSelected && !isGhost && (
                       <rect
                         x={2.5}
                         y={2.5}
@@ -1919,8 +2215,117 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                 {/* Intestazione dello stallo: pillola a riga singola con il nome
                     del mezzo, il badge `ATTIVO` e il disco di eliminazione. */}
                 {renderBayHeader(view)}
+
+                {/* ZONA DI RILASCIO (Drag Overlay cross-pianale): quando il
+                    cursore è dentro la sagoma di un ALTRO stallo, il pianale
+                    bersaglio mostra un contorno blu di evidenziazione e, sopra la
+                    Cabina, l'invito esplicito al rilascio. Il livello è disegnato
+                    per ultimo, quindi resta sopra il fondo bianco del mezzo. */}
+                {dragOverlay &&
+                  dragOverlay.targetBayId === view.bay.id &&
+                  dragOverlay.targetBayId !== dragOverlay.sourceBayId && (
+                    <g data-canvas-drop-target={view.bay.id} pointerEvents="none">
+                      <rect
+                        x={0}
+                        y={0}
+                        width={view.bay.vehicle.width}
+                        height={view.bay.vehicle.length}
+                        rx={4}
+                        fill="none"
+                        stroke={SELECTION_COLOR}
+                        strokeWidth={DROP_HIGHLIGHT_STROKE_CM}
+                        strokeDasharray="10 5"
+                        opacity={0.9}
+                      />
+                      {/* Badge di rilascio: vive nella fascia di intestazione,
+                          **sotto** la pillola `MEZZO n` (`BAY_HEADER_BOTTOM_CM`)
+                          e con margine di sicurezza sopra la sommità del glifo
+                          della targa, così resta sempre a schermo senza coprire
+                          né l'header dello stallo né la targa del mezzo. */}
+                      <g
+                        transform={`translate(${view.bay.vehicle.width / 2}, ${
+                          BAY_HEADER_BOTTOM_CM + 20
+                        })`}
+                      >
+                        {/* Pastiglia centrata sull'asse del pianale: l'ingombro
+                            (304 cm) è tarato sulla battuta più lunga possibile
+                            (`📥 Rilascia per caricare su MEZZO n`, ~300 cm con le
+                            metriche reali di Helvetica sui glifi emoji), così il
+                            testo non sborda mai dal proprio fondo blu. */}
+                        <rect
+                          x={-152}
+                          y={-24}
+                          width={304}
+                          height={34}
+                          rx={6}
+                          fill={SELECTION_COLOR}
+                        />
+                        <text
+                          x={0}
+                          y={0}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fontFamily={FONT_FAMILY_LABEL}
+                          fontSize={15}
+                          fontWeight="800"
+                          fill="#FFFFFF"
+                        >
+                          📥 Rilascia per caricare su MEZZO {view.index + 1}
+                        </text>
+                      </g>
+                    </g>
+                  )}
               </g>
             ))}
+
+            {/* ---------------------------------------------------------------- *
+             *  DRAG OVERLAY — LIVELLO SVG GLOBALE (in coda al mondo)
+             *
+             *  I colli in movimento vivono QUI, in coordinate di mondo, sopra
+             *  **tutti** gli stalli: il fondo bianco (`fill="white"`) del camion
+             *  adiacente non può più coprirli mentre attraversano il canale di
+             *  180 cm. L'ombra CAD (`drop-shadow-lg`) li stacca dal piano e il
+             *  layer non intercetta alcun evento (`pointerEvents="none"`), così il
+             *  pointer capture del gesto resta sul collo di partenza.
+             * ----------------------------------------------------------------- */}
+            {dragOverlay && (
+              <g id="canvas-drag-overlay" data-canvas-drag-overlay="true" pointerEvents="none">
+                {dragOverlay.members.map((member) => {
+                  const isInTransit = dragOverlay.targetBayId === null;
+                  return (
+                    <g
+                      key={`overlay-${member.item.id}`}
+                      transform={`translate(${member.worldX}, ${member.worldY})`}
+                      opacity={isInTransit ? TRANSIT_OPACITY : 1}
+                      filter="url(#truck-shadow)"
+                    >
+                      <rect
+                        width={member.item.width}
+                        height={member.item.length}
+                        fill={member.item.color}
+                        stroke={isInTransit ? TRANSIT_COLOR : DRAG_OVERLAY_BORDER}
+                        strokeWidth={2.5}
+                        strokeDasharray={isInTransit ? '6 3' : undefined}
+                        rx={2}
+                      />
+                      <g clipPath={`url(#${clipIdForItem(member.item.id)})`}>
+                        {renderItemLabels(member.item)}
+                      </g>
+                      {isInTransit && (
+                        <text
+                          x={member.item.width / 2}
+                          y={member.item.length / 2 + 3}
+                          textAnchor="middle"
+                          className="text-[9px] font-bold fill-slate-700 select-none"
+                        >
+                          (zona neutra)
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            )}
           </g>
 
           {/* Rettangolo di selezione (lasso): disegnato in px schermo, sopra il

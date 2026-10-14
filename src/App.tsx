@@ -24,6 +24,7 @@ import { ItemInspector } from './components/ItemInspector';
 import { NoteInspector } from './components/NoteInspector';
 import { PrintReport } from './components/PrintReport';
 import { isPickerAbortError, saveProjectWithHandle } from './utils/fileStorage';
+import { PLATE_MAX_LENGTH } from './utils/plateBadge';
 import {
   calculateDockDisplacement,
   calculateSnapPosition,
@@ -431,6 +432,104 @@ export default function App() {
   );
 
   /**
+   * **Clona il mezzo attivo** ("camion gemello"): crea un nuovo stallo identico
+   * a quello indicato — stessa configurazione veicolo, stessa targa con suffisso
+   * ` (copia)`, copia profonda di tutti i colli e di tutte le note — e lo rende
+   * subito il Mezzo Attivo.
+   *
+   * Gli **ID vengono rigenerati** (`makeItemId` per i colli, prefisso `note_` per
+   * le note): due stalli non possono mai condividere un ID, altrimenti selezione,
+   * drag e cancellazione finirebbero per colpire il collo sbagliato. L'intera
+   * operazione è **un solo passo di Undo** (`pushSnapshot` accende anche il lavoro
+   * come non salvato).
+   */
+  const handleCloneBay = useCallback(
+    (bayId: string) => {
+      if (bays.length >= MAX_BAYS) return;
+      const source = bays.find((bay) => bay.id === bayId) ?? activeBay;
+      if (!source) return;
+
+      // Fotogramma PRIMA della mutazione: la clonazione è UN passo di Undo.
+      pushSnapshot(captureSnapshot());
+
+      const newBayId = `bay-${Date.now()}`;
+      const stamp = Date.now();
+      const basePlate = source.plate.trim();
+      /* Il suffisso non viene mai raddoppiato: la targa di un "gemello di un
+         gemello" resta quella del primo clone. Il confronto è case-insensitive
+         perché il campo Targa riporta in maiuscolo tutto ciò che l'operatore
+         digita (`... (COPIA)`), mentre il suffisso generato qui è minuscolo. */
+      const newPlate = basePlate
+        ? /\(copia\)$/i.test(basePlate)
+          ? basePlate
+          : `${basePlate} (copia)`.slice(0, PLATE_MAX_LENGTH)
+        : '';
+
+      const clonedItems: PlacedItem[] = source.items.map((item, idx) => ({
+        ...item,
+        id: makeItemId(item.code, `c${stamp}_${idx}_`),
+      }));
+
+      const clonedNotes: SideNote[] = source.notes.map((note, idx) => ({
+        ...note,
+        id: `note_${stamp}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      }));
+
+      const clonedBay: DeckBay = {
+        id: newBayId,
+        vehicle: { ...source.vehicle },
+        plate: newPlate,
+        items: clonedItems,
+        notes: clonedNotes,
+      };
+
+      setBays((prev) => (prev.length >= MAX_BAYS ? prev : [...prev, clonedBay]));
+      setActiveBayId(newBayId);
+      setSelectedItemIds([]);
+      setSelectedNoteId(null);
+    },
+    [bays, activeBay, pushSnapshot, captureSnapshot]
+  );
+
+  /**
+   * **Riordino degli stalli**: scambia la posizione dello stallo indicato con
+   * quella del vicino (`left` = verso il primo posto, `right` = verso l'ultimo).
+   *
+   * Lo scambio avviene in un'unica transizione di stato e non tocca nessun dato
+   * interno allo stallo (le coordinate di colli e note restano **locali**): gli
+   * offset del mondo si riallineano da soli via `bayOffsets`, le intestazioni
+   * canvas `MEZZO n` e la sequenza delle pagine A4 seguono l'ordine dell'array.
+   * L'operazione vale **UN solo passo di Undo**.
+   */
+  const handleReorderBay = useCallback(
+    (bayId: string, direction: 'left' | 'right') => {
+      const index = bays.findIndex((bay) => bay.id === bayId);
+      if (index === -1) return;
+
+      const targetIndex = direction === 'left' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= bays.length) return;
+
+      // Fotogramma PRIMA della mutazione: il riordino è UN passo di Undo.
+      pushSnapshot(captureSnapshot());
+
+      // Indici ricalcolati sulla flotta corrente: se nel frattempo la flotta è
+      // cambiata, lo scambio semplicemente non avviene (nessun indice cieco).
+      setBays((prev) => {
+        const from = prev.findIndex((bay) => bay.id === bayId);
+        if (from === -1) return prev;
+        const to = direction === 'left' ? from - 1 : from + 1;
+        if (to < 0 || to >= prev.length) return prev;
+
+        const next = [...prev];
+        next[from] = prev[to];
+        next[to] = prev[from];
+        return next;
+      });
+    },
+    [bays, pushSnapshot, captureSnapshot]
+  );
+
+  /**
    * Svuota integralmente la centrale riportandola al piano di fabbrica: un solo
    * stallo (`bay-1`) con il mezzo di default e nessun carico.
    */
@@ -439,6 +538,140 @@ export default function App() {
     setBays([freshBay]);
     setActiveBayId(freshBay.id);
   }, []);
+
+  /* ------------------------------------------------------------------------ *
+   *  TRAVASO COLLI FRA STALLI (FASE 2 — INTERAZIONE FLOTTA)
+   *
+   *  Due strade per lo stesso risultato: il **drag & drop cross-pianale** sul
+   *  canvas (`handleTransferItems`, invocato al rilascio su un altro mezzo) e il
+   *  pulsante rapido **"Sposta su Mezzo X"** dell'`ItemInspector`
+   *  (`handleMoveItemsToBay`, che riusa lo spawn intelligente first-fit).
+   *
+   *  Entrambe le operazioni sono **atomiche** e valgono **un solo passo** di
+   *  Undo: toccano due stalli nella stessa transizione di stato, quindi non
+   *  possono passare dalla porta d'ingresso del solo mezzo attivo
+   *  (`updateActiveBay`) — altrimenti il trasferimento produrrebbe due
+   *  fotogrammi e due render intermedi con i colli "in nessun pianale".
+   * ------------------------------------------------------------------------ */
+
+  /**
+   * Trasferisce colli da uno stallo all'altro (drag & drop cross-pianale).
+   *
+   * Le `placements` arrivano già convertite in coordinate **locali** del
+   * bersaglio: qui si adatta la sola larghezza, perché un collo "Sfuso" occupa
+   * per definizione l'intera larghezza utile del mezzo e i due pianali possono
+   * avere larghezze diverse. Lo stallo di destinazione diventa il **Mezzo
+   * Attivo** e la selezione resta agganciata ai colli appena trasferiti, così
+   * l'HUD continua a comandare ciò che l'operatore ha appena spostato.
+   *
+   * Nessuno snapshot qui: il fotogramma è già stato aperto dal canvas al
+   * `pointerDown` e viene convalidato al `pointerUp` (`handleCommitHistoryGesture`).
+   */
+  const handleTransferItems = useCallback(
+    (sourceBayId: string, targetBayId: string, placements: ItemPositionUpdate[]) => {
+      if (sourceBayId === targetBayId || placements.length === 0) return;
+      const placementMap = new Map(placements.map((p) => [p.id, p]));
+
+      setBays((prev) => {
+        const sourceBay = prev.find((bay) => bay.id === sourceBayId);
+        const targetBay = prev.find((bay) => bay.id === targetBayId);
+        if (!sourceBay || !targetBay) return prev;
+
+        const itemsToMove = sourceBay.items.filter((item) => placementMap.has(item.id));
+        if (itemsToMove.length === 0) return prev;
+
+        const updatedMovedItems = itemsToMove.map((item) => {
+          const pos = placementMap.get(item.id)!;
+          // Collo a tutta larghezza (es. SFUSO): la larghezza segue il nuovo mezzo.
+          const isBulk = item.width === sourceBay.vehicle.width;
+          return {
+            ...item,
+            x: pos.x,
+            y: pos.y,
+            width: isBulk ? targetBay.vehicle.width : item.width,
+          };
+        });
+
+        return prev.map((bay) => {
+          if (bay.id === sourceBayId) {
+            return {
+              ...bay,
+              items: bay.items.filter((item) => !placementMap.has(item.id)),
+            };
+          }
+          if (bay.id === targetBayId) {
+            return { ...bay, items: [...bay.items, ...updatedMovedItems] };
+          }
+          return bay;
+        });
+      });
+
+      setActiveBayId(targetBayId);
+      setSelectedItemIds(placements.map((p) => p.id));
+      setSelectedNoteId(null);
+    },
+    []
+  );
+
+  /**
+   * Sposta i colli **selezionati** sul primo slot utile di un altro stallo
+   * (`findSmartSpawnPosition`: dalla Cabina verso le Porte, da sinistra a
+   * destra), come il pulsante `[ ➔ MEZZO n ]` dell'`ItemInspector`.
+   *
+   * A differenza del drag & drop — dove è il puntatore a decidere dove
+   * atterrano i colli — qui la disposizione è calcolata dal motore di stiva:
+   * ogni collo viene piazzato sul pianale bersaglio **già aggiornato** dai
+   * precedenti, così il lotto si accoda ordinatamente senza sovrapposizioni.
+   * Il bersaglio diventa il Mezzo Attivo e la selezione segue i colli.
+   */
+  const handleMoveItemsToBay = useCallback(
+    (targetBayId: string) => {
+      if (!activeBay || activeBay.id === targetBayId || selectedItemIds.length === 0) return;
+
+      const sourceBay = activeBay;
+      const targetBay = bays.find((bay) => bay.id === targetBayId);
+      if (!targetBay) return;
+
+      const selectedSet = new Set(selectedItemIds);
+      const itemsToMove = sourceBay.items.filter((item) => selectedSet.has(item.id));
+      if (itemsToMove.length === 0) return;
+
+      // Fotogramma PRIMA della mutazione: l'intero travaso è UN passo di Undo.
+      pushSnapshot(captureSnapshot());
+
+      // Pianale bersaglio "di lavoro": cresce collo dopo collo per calcolare gli
+      // spawn successivi esattamente come farebbe un lotto in ingresso.
+      const currentTargetItems = [...targetBay.items];
+      const moved: PlacedItem[] = [];
+
+      for (const item of itemsToMove) {
+        const isBulk = item.width === sourceBay.vehicle.width;
+        const width = isBulk ? targetBay.vehicle.width : item.width;
+        const spawn = findSmartSpawnPosition(width, item.length, targetBay.vehicle, currentTargetItems);
+
+        const placed: PlacedItem = { ...item, x: spawn.x, y: spawn.y, width };
+        currentTargetItems.push(placed);
+        moved.push(placed);
+      }
+
+      setBays((prev) =>
+        prev.map((bay) => {
+          if (bay.id === sourceBay.id) {
+            return { ...bay, items: bay.items.filter((item) => !selectedSet.has(item.id)) };
+          }
+          if (bay.id === targetBayId) {
+            return { ...bay, items: [...bay.items, ...moved] };
+          }
+          return bay;
+        })
+      );
+
+      setActiveBayId(targetBayId);
+      setSelectedItemIds(moved.map((item) => item.id));
+      setSelectedNoteId(null);
+    },
+    [activeBay, bays, selectedItemIds, pushSnapshot, captureSnapshot]
+  );
 
   /**
    * Cambio di configurazione del **mezzo attivo** (preset di catalogo o
@@ -725,6 +958,54 @@ export default function App() {
     updateActiveItems((prev) => prev.filter((item) => !idSet.has(item.id)));
     setSelectedItemIds([]);
   }, [selectedItemIds, updateActiveItems, pushSnapshot, captureSnapshot]);
+
+  /**
+   * **Duplica i colli selezionati** sul Mezzo Attivo (pulsante `[ 📋 Duplica ]`
+   * dell'`ItemInspector` e scorciatoia `Ctrl / Cmd + D`).
+   *
+   * Ogni copia conserva nome, cliente, tinta, rotazione e misure dell'originale
+   * ma riceve un **ID nuovo** (`makeItemId`) e viene piazzata sul **primo slot
+   * utile** verso le Porte (`findSmartSpawnPosition`, first-fit Cabina → Porte):
+   * il pianale di lavoro cresce collo dopo collo, così il lotto duplicato si
+   * accoda ordinatamente senza sovrapposizioni. La selezione si sposta sui
+   * duplicati e l'intera operazione è **UN solo passo di Undo**.
+   */
+  const handleDuplicateSelected = useCallback(() => {
+    if (selectedItemIds.length === 0) return;
+
+    const selectedSet = new Set(selectedItemIds);
+    const itemsToDuplicate = items.filter((item) => selectedSet.has(item.id));
+    if (itemsToDuplicate.length === 0) return;
+
+    // Fotogramma PRIMA della mutazione: l'intera duplicazione è UN passo di Undo.
+    pushSnapshot(captureSnapshot());
+
+    /* I duplicati vengono calcolati **fuori** dall'updater di stato: React 19
+       invoca due volte gli updater in `StrictMode` per scoprirne le impurità,
+       quindi generare gli ID dentro l'updater produrrebbe ID fantasma (e una
+       selezione con doppioni). Qui l'updater resta puro e la selezione finale
+       contiene esattamente gli ID davvero presenti in scena. */
+    const stamp = Date.now();
+    const working = [...items];
+    const duplicates: PlacedItem[] = [];
+
+    for (const item of itemsToDuplicate) {
+      const spawn = findSmartSpawnPosition(item.width, item.length, vehicle, working);
+
+      const duplicate: PlacedItem = {
+        ...item,
+        id: makeItemId(item.code, `dup_${stamp}_`),
+        x: spawn.x,
+        y: spawn.y,
+      };
+
+      working.push(duplicate);
+      duplicates.push(duplicate);
+    }
+
+    updateActiveItems((prev) => [...prev, ...duplicates]);
+    setSelectedItemIds(duplicates.map((item) => item.id));
+  }, [selectedItemIds, items, vehicle, updateActiveItems, pushSnapshot, captureSnapshot]);
 
   /**
    * Avvia un nuovo piano di carico da zero:
@@ -1089,6 +1370,17 @@ export default function App() {
         return;
       }
 
+      // Duplicazione rapida — `Ctrl / Cmd + D`: attiva **solo** con almeno un
+      // collo selezionato (altrimenti la scorciatoia non viene intercettata e il
+      // browser conserva il proprio comportamento, es. "aggiungi ai preferiti").
+      if ((e.ctrlKey || e.metaKey) && key === 'd') {
+        if (selectedItemIds.length > 0) {
+          e.preventDefault();
+          handleDuplicateSelected();
+        }
+        return;
+      }
+
       // Spinta a Battuta con le quattro frecce: il blocco selezionato viene
       // portato a filo della parete o del primo ostacolo in quella direzione.
       // Le guardie sui campi di scrittura sono già passate, quindi mentre si
@@ -1136,6 +1428,7 @@ export default function App() {
   }, [
     handleRotateSelected,
     handleDockSelected,
+    handleDuplicateSelected,
     handleDeleteSelected,
     handleDeleteNote,
     handleUndo,
@@ -1181,6 +1474,7 @@ export default function App() {
             onUpdateNotePos={handleUpdateNotePos}
             onUpdateNoteSize={handleUpdateNoteSize}
             onUpdateItemsPos={handleUpdateItemsPos}
+            onTransferItems={handleTransferItems}
             onBeginHistoryGesture={handleBeginHistoryGesture}
             onCommitHistoryGesture={handleCommitHistoryGesture}
           />
@@ -1198,8 +1492,12 @@ export default function App() {
                   selectedItems={selectedItems}
                   vehicle={vehicle}
                   notes={notes}
+                  bays={bays}
+                  activeBayId={activeBay.id}
+                  onMoveToBay={handleMoveItemsToBay}
                   onUpdateItemProperties={handleUpdateItemProperties}
                   onRotateSelected={handleRotateSelected}
+                  onDuplicateSelected={handleDuplicateSelected}
                   onDockSelected={handleDockSelected}
                   onDeleteSelected={handleDeleteSelected}
                   onAddNote={handleAddNote}
@@ -1225,6 +1523,8 @@ export default function App() {
             activeBayId={activeBay.id}
             onSelectBay={handleSelectBay}
             onAddBay={handleAddBay}
+            onCloneBay={handleCloneBay}
+            onReorderBay={handleReorderBay}
             onDeleteBay={handleDeleteBay}
             vehicle={vehicle}
             onSelectVehicle={handleSelectVehicle}

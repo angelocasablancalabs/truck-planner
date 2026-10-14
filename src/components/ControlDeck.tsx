@@ -34,6 +34,7 @@ import {
   ArrowUpDown,
   ArrowLeftRight,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Copy,
   Check,
@@ -163,6 +164,20 @@ interface ControlDeckProps {
   onSelectBay: (bayId: string) => void;
   /** Aggiunge un mezzo alla centrale (disabilitato al raggiungimento di `MAX_BAYS`). */
   onAddBay: () => void;
+  /**
+   * **Clona il mezzo attivo** ("camion gemello"): crea un nuovo stallo identico
+   * a quello indicato — stessa configurazione veicolo, stessa targa con suffisso
+   * ` (copia)`, copia profonda di tutti i colli e di tutte le note con ID
+   * rigenerati — e lo rende subito il Mezzo Attivo (un solo passo di Undo).
+   */
+  onCloneBay: (bayId: string) => void;
+  /**
+   * **Riordino degli stalli**: scambia lo stallo indicato con quello adiacente
+   * (`left` = verso l'inizio della flotta, `right` = verso la fine). Gli offset
+   * del mondo si riallineano da soli (`bayOffsets`) e l'operazione vale un solo
+   * passo di Undo.
+   */
+  onReorderBay: (bayId: string, direction: 'left' | 'right') => void;
   /** Elimina un mezzo dalla centrale (disabilitato sull'ultimo rimasto). */
   onDeleteBay: (bayId: string) => void;
   vehicle: VehicleConfig;
@@ -251,6 +266,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   activeBayId,
   onSelectBay,
   onAddBay,
+  onCloneBay,
+  onReorderBay,
   onDeleteBay,
   vehicle,
   onSelectVehicle,
@@ -623,9 +640,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
    */
   const triggerPrint = (mode: 'clean' | 'full') => {
     const originalTitle = document.title;
-    if (mode === 'clean') {
-      document.title = ' ';
-    }
+    // Assegna un titolo parlante per la stampa: driver PDF e "Salva come PDF"
+    // lo useranno come nome file di default al posto del dominio del sito.
+    const cleanPlate = (bays[0]?.plate || '').trim().replace(/[^a-zA-Z0-9]/g, '_');
+    document.title = cleanPlate ? `piano-${cleanPlate}` : 'piano-di-carico';
 
     /**
      * Foglio temporaneo della stampa: **A4 verticale** per la scheda tecnica
@@ -840,25 +858,61 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
             Centrale ({bays.length}/{MAX_BAYS} Mezzi)
           </label>
-          <button
-            type="button"
-            id="btn-delete-bay"
-            onClick={() => onDeleteBay(activeBayId)}
-            disabled={!canDeleteBay(bays)}
-            title={
-              canDeleteBay(bays)
-                ? 'Elimina il mezzo attivo dalla centrale'
-                : 'La centrale deve conservare almeno un mezzo'
-            }
-            className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition ${
-              canDeleteBay(bays)
-                ? 'text-red-800 hover:text-red-900 hover:bg-red-50 border border-transparent hover:border-red-200 cursor-pointer'
-                : 'text-slate-300 cursor-not-allowed border border-transparent'
-            }`}
-          >
-            <Trash2 className="w-3 h-3" />
-            Elimina
-          </button>
+          <div className="flex items-center gap-1.5">
+            {/* Frecce di riordino stalli: visibili con più di 1 mezzo. Scambiano
+                il mezzo attivo con il vicino (`◀` = verso il primo posto,
+                `▶` = verso l'ultimo): gli offset del mondo e le intestazioni
+                `MEZZO n` si riallineano all'istante, con UN passo di Undo. */}
+            {bays.length > 1 && (
+              <div className="flex items-center border border-slate-200 rounded overflow-hidden bg-white shadow-2xs">
+                <button
+                  type="button"
+                  id="btn-reorder-bay-left"
+                  onClick={() => onReorderBay(activeBayId, 'left')}
+                  disabled={bays.findIndex((b) => b.id === activeBayId) <= 0}
+                  title="Sposta questo mezzo verso sinistra"
+                  className="p-1 hover:bg-slate-100 disabled:opacity-25 disabled:cursor-not-allowed text-slate-600 transition cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span className="sr-only">Sposta a sinistra</span>
+                </button>
+                <div className="w-[1px] h-3.5 bg-slate-200" />
+                <button
+                  type="button"
+                  id="btn-reorder-bay-right"
+                  onClick={() => onReorderBay(activeBayId, 'right')}
+                  disabled={
+                    bays.findIndex((b) => b.id === activeBayId) >= bays.length - 1
+                  }
+                  title="Sposta questo mezzo verso destra"
+                  className="p-1 hover:bg-slate-100 disabled:opacity-25 disabled:cursor-not-allowed text-slate-600 transition cursor-pointer"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  <span className="sr-only">Sposta a destra</span>
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              id="btn-delete-bay"
+              onClick={() => onDeleteBay(activeBayId)}
+              disabled={!canDeleteBay(bays)}
+              title={
+                canDeleteBay(bays)
+                  ? 'Elimina il mezzo attivo dalla centrale'
+                  : 'La centrale deve conservare almeno un mezzo'
+              }
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition ${
+                canDeleteBay(bays)
+                  ? 'text-red-800 hover:text-red-900 hover:bg-red-50 border border-transparent hover:border-red-200 cursor-pointer'
+                  : 'text-slate-300 cursor-not-allowed border border-transparent'
+              }`}
+            >
+              <Trash2 className="w-3 h-3" />
+              Elimina
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1">
@@ -899,6 +953,23 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             >
               <Plus className="w-3 h-3 shrink-0" />
               <span>Mezzo</span>
+            </button>
+          )}
+
+          {/* Clona mezzo attivo ("camion gemello"): presente finché la centrale
+              non è al completo. Lo stallo nasce identico a quello attivo — mezzo,
+              targa `(copia)`, colli e note con ID rigenerati — e diventa subito
+              il Mezzo Attivo, in UN solo passo di Undo. */}
+          {bays.length < MAX_BAYS && (
+            <button
+              type="button"
+              id="btn-clone-bay"
+              onClick={() => onCloneBay(activeBayId)}
+              title={`Clona il mezzo attivo (crea una copia identica con lo stesso carico, max ${MAX_BAYS})`}
+              className="flex items-center gap-1 rounded-full border border-dashed border-slate-400 px-2 py-1 text-[11px] leading-none font-semibold text-slate-600 transition cursor-pointer hover:border-emerald-500 hover:text-emerald-700 hover:bg-emerald-50"
+            >
+              <Copy className="w-3 h-3 shrink-0 text-emerald-600" />
+              <span>Clona</span>
             </button>
           )}
         </div>

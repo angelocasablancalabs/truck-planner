@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "verify:multi-bay": "node scripts/verify-multi-bay.mjs"
+    "verify:multi-bay": "node scripts/verify-multi-bay.mjs",
+    "verify:bay-transfer": "node scripts/verify-bay-transfer.mjs",
+    "verify:fleet-advanced": "node scripts/verify-fleet-advanced.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
