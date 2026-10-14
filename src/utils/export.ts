@@ -1,5 +1,6 @@
-import type { LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
+import type { DeckBay, LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { calculateLdmMetrics, formatLdmMeters, hasCollision, isOutOfBounds } from './snapping';
+import { bayOffsets } from './bays';
 import {
   ALERT_COLOR,
   LDM_BADGE,
@@ -138,6 +139,9 @@ const MONO_FONT_FAMILY = 'SFMono-Regular, Menlo, Consolas, monospace';
 /** Nome del file scaricato quando gli appunti non sono disponibili. */
 const FALLBACK_FILE_NAME = 'piano-di-carico.png';
 
+/** Mezzo di riferimento usato solo se la flotta è vuota (caso impossibile in app). */
+const SCENE_FALLBACK_VEHICLE: VehicleConfig = { id: 'empty', name: '', width: 250, length: 1328 };
+
 /**
  * Ingombro vettoriale completo della scena, in centimetri reali.
  * Include l'eventuale sforamento posteriore dei colli oltre le porte e **tutte**
@@ -159,6 +163,30 @@ export interface PianoExtent {
   doorLine: number;
   /** Y (cm) della didascalia "PORTE POSTERIORI". */
   doorLabelY: number;
+  /**
+   * Traslazione orizzontale (cm) dello stallo nel mondo: `0` per un pianale
+   * singolo, la somma di larghezze e stacchi per gli stalli successivi.
+   */
+  xOffset: number;
+  /**
+   * Altezza (cm) della scena **prima** dell'arrotondamento: il disegno la usa
+   * per calcolare `pxPerCm` sulla stessa larghezza, così i corpi dei font restano
+   * identici a schermo con uno, due o tre mezzi affiancati.
+   */
+  estimatedHeight: number;
+}
+
+/**
+ * Ingombro di **un solo stallo**, alle sue coordinate di mondo (`xOffset`).
+ *
+ * Le coordinate interne (`items`, `notes`, targa) sono locali al pianale: qui
+ * vengono semplicemente traslate di `xOffset`, esattamente come fa il disegno.
+ */
+interface BayExtent extends PianoExtent {
+  /** Bordo destro del pianale utile (cm, coordinate di mondo). */
+  plotRightX: number;
+  /** Bordo inferiore dell'ultimo elemento (cm, coordinate di mondo). */
+  plotBottomY: number;
 }
 
 /** Snapshot SVG autonomo + dimensioni in px CSS dell'immagine finale. */
@@ -172,7 +200,7 @@ export interface PianoSnapshot {
 }
 
 /**
- * Calcola l'ingombro della scena da esportare, con **inquadratura dinamica 2D**.
+ * Calcola l'ingombro di **un singolo stallo**, con **inquadratura dinamica 2D**.
  *
  * L'altezza include gli eventuali colli che sforano dalle porte posteriori e il
  * fondo di ogni card di nota:
@@ -197,14 +225,16 @@ export interface PianoSnapshot {
  * @param labelDensity Densità etichette applicata all'immagine (`all` di default)
  * @param notes        Note laterali da includere nello snapshot
  * @param plate        Targa / identificativo del mezzo (stringa vuota = nessuna)
+ * @param xOffset      Traslazione orizzontale dello stallo nel mondo (cm)
  */
-export const getPianoExtent = (
+const getBayExtent = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
   labelDensity: LabelDensity = 'all',
   notes: SideNote[] = [],
-  plate: string = ''
-): PianoExtent => {
+  plate: string = '',
+  xOffset: number = 0
+): BayExtent => {
   // Geometria reale delle card: altezza fissata dall'operatore o auto-adattata.
   const noteLayouts = notes.length > 0 ? resolveNoteLayouts(notes) : [];
 
@@ -274,18 +304,74 @@ export const getPianoExtent = (
   // l'ingombro del testo della targa estesa fuori sponda (`plateLeftX` /
   // `plateRightX`) e gli spazi riservati ai righelli. Nessun elemento può
   // restare fuori: la targa non viene mai tagliata.
-  const minX = Math.min(-leftPadding, sceneMinX, plateLeftX);
-  const maxX = Math.max(vehicle.width + rightPadding, sceneMaxX, plateRightX);
+  const minX = xOffset + Math.min(-leftPadding, sceneMinX, plateLeftX);
+  const maxX = xOffset + Math.max(vehicle.width + rightPadding, sceneMaxX, plateRightX);
   const minY = SCENE_TOP_CM;
+  const estimatedHeight = -minY + maxY + PADDING.bottom;
 
   return {
     minX,
     minY,
     width: maxX - minX,
-    height: -minY + maxY + PADDING.bottom,
+    height: estimatedHeight,
+    estimatedHeight,
     contentBottom: maxY,
     doorLine: vehicle.length,
     doorLabelY,
+    xOffset,
+    plotRightX: xOffset + vehicle.width,
+    plotBottomY: maxY,
+  };
+};
+
+/**
+ * Inquadratura di **un solo stallo** (pianale singolo): API storica, identica a
+ * prima dell'arrivo della centrale multi-pianale.
+ */
+export const getPianoExtent = (
+  vehicle: VehicleConfig,
+  items: PlacedItem[],
+  labelDensity: LabelDensity = 'all',
+  notes: SideNote[] = [],
+  plate: string = ''
+): PianoExtent =>
+  getBayExtent(vehicle, items, labelDensity, notes, plate, 0);
+
+/**
+ * Inquadratura dell'**intera flotta**: unisce gli ingombri di tutti gli stalli
+ * affiancati (`utils/bays.ts`) in un unico `viewBox`.
+ *
+ * È la geometria della **Stampa Solo Grafica**: tutti i pianali finiscono su un
+ * unico foglio, affiancati a grandezza proporzionata, con lo stesso stacco con
+ * cui sono disegnati a schermo.
+ */
+export const getFleetExtent = (bays: DeckBay[], labelDensity: LabelDensity = 'all'): PianoExtent => {
+  if (bays.length === 0) {
+    return getBayExtent(SCENE_FALLBACK_VEHICLE, [], labelDensity, [], '', 0);
+  }
+
+  const offsets = bayOffsets(bays);
+  const extents = bays.map((bay, index) =>
+    getBayExtent(bay.vehicle, bay.items, labelDensity, bay.notes, bay.plate, offsets[index])
+  );
+
+  const first = extents[0];
+  const minX = Math.min(...extents.map((extent) => extent.minX));
+  const maxX = Math.max(...extents.map((extent) => extent.minX + extent.width));
+  const minY = Math.min(...extents.map((extent) => extent.minY));
+  const maxY = Math.max(...extents.map((extent) => extent.contentBottom));
+  const estimatedHeight = -minY + maxY + PADDING.bottom;
+
+  return {
+    minX,
+    minY,
+    width: maxX - minX,
+    height: estimatedHeight,
+    estimatedHeight,
+    contentBottom: maxY,
+    doorLine: first.doorLine,
+    doorLabelY: Math.max(...extents.map((extent) => extent.doorLabelY)),
+    xOffset: 0,
   };
 };
 
@@ -514,44 +600,30 @@ const renderPlateBadge = (vehicle: VehicleConfig, plate: string): string => {
 };
 
 /**
- * Costruisce lo snapshot SVG autonomo e pulito del pianale.
+ * Disegna **un singolo stallo** alle proprie coordinate locali.
  *
- * Contenuto (in cm reali, Y = 0 in alto verso la Cabina):
- * sfondo bianco, piano di carico, tacche metriche ogni metro, quota nominale
- * 13,20 m (sui mezzi che la raggiungono), linea guida e badge del contatore
- * dinamico LDM, tutti i colli con colore/bordo/testo ritagliato dal proprio
- * clipPath, le note laterali **alle loro coordinate 2D** (se presenti), il badge
- * **targa / identificativo mezzo** sopra la Cabina, sponde laterali, parete
- * Cabina, linea tratteggiata delle porte posteriori e didascalie. Nessun
- * elemento di interfaccia.
+ * Contenuto (in cm reali, Y = 0 in alto verso la Cabina): piano di carico, tacche
+ * metriche ogni metro, quota nominale 13,20 m (sui mezzi che la raggiungono),
+ * linea guida e badge del contatore dinamico LDM, tutti i colli con
+ * colore/bordo/testo ritagliato dal proprio clipPath, le note laterali **alle
+ * loro coordinate 2D** (se presenti), il badge **targa / identificativo mezzo**
+ * sopra la Cabina, sponde laterali, parete Cabina, linea tratteggiata delle porte
+ * posteriori e didascalie. Nessun elemento di interfaccia.
  *
- * @param vehicle      Configurazione del mezzo
- * @param items        Colli stivati
- * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
- * @param notes        Note laterali di carico da includere nell'immagine
- * @param plate        Targa / identificativo del mezzo (vuota = nessun badge)
+ * @param includeClipDefs `true` per emettere il blocco `<defs>` dei `clipPath`
+ *        dei colli: negli snapshot multi-mezzo le definizioni sono raccolte una
+ *        sola volta in testa al documento.
  */
-export const buildPianoSvg = (
+const renderBayParts = (
   vehicle: VehicleConfig,
   items: PlacedItem[],
   labelDensity: LabelDensity,
-  notes: SideNote[] = [],
-  plate: string = ''
-): PianoSnapshot => {
-  // L'inquadratura riceve la targa: il `viewBox` include l'ingombro reale del
-  // testo esteso fuori sponda, quindi la scritta non viene mai tagliata.
-  const extent = getPianoExtent(vehicle, items, labelDensity, notes, plate);
-  const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
-  const height = Math.max(1, Math.round(extent.height * pxPerCm));
-
+  notes: SideNote[],
+  plate: string,
+  doorLabelY: number,
+  includeClipDefs: boolean
+): string => {
   const parts: string[] = [];
-
-  // Sfondo bianco pieno (lo snapshot deve restare leggibile su qualsiasi chat).
-  parts.push(
-    `<rect x="${extent.minX}" y="${extent.minY}" width="${round(extent.width)}" height="${round(
-      extent.height
-    )}" fill="${COLORS.background}"/>`
-  );
 
   // Piano di carico utile (leggera campitura, silhouette leggibile).
   parts.push(
@@ -559,7 +631,7 @@ export const buildPianoSvg = (
   );
 
   // Definizioni: un clipPath per collo, così il testo non può sbordare.
-  if (items.length > 0) {
+  if (includeClipDefs && items.length > 0) {
     parts.push(
       `<defs>${items
         .map(
@@ -625,7 +697,7 @@ export const buildPianoSvg = (
           LDM_BADGE_LEFT_X,
           LDM_BADGE_CENTER_X,
           maxOccupiedY,
-          `▶ ${formatLdmMeters(maxOccupiedY)} m`,
+          `${formatLdmMeters(maxOccupiedY)} m ▶`,
           COLORS.ldmBadge
         )
       );
@@ -645,7 +717,7 @@ export const buildPianoSvg = (
           LDM_BADGE_LEFT_X,
           LDM_BADGE_CENTER_X,
           ldm.leftY,
-          `▶ ${formatLdmMeters(ldm.leftY)} m`,
+          `${formatLdmMeters(ldm.leftY)} m ▶`,
           leftBadgeColor
         )
       );
@@ -693,7 +765,7 @@ export const buildPianoSvg = (
   // Badge targa / identificativo mezzo: **solo testo** sopra la Cabina, con la
   // stessa geometria del canvas a schermo (corpo base 30 px). La scritta può
   // sforare di 50 cm per lato oltre le sponde: il `viewBox` calcolato da
-  // `getPianoExtent` la contiene già. Con targa vuota non viene emesso nulla: lo
+  // `getBayExtent` la contiene già. Con targa vuota non viene emesso nulla: lo
   // snapshot resta pulito e trasparente.
   parts.push(renderPlateBadge(vehicle, plate));
 
@@ -703,13 +775,128 @@ export const buildPianoSvg = (
   parts.push(
     `<text x="${vehicle.width / 2}" y="${CABINA_CAPTION_BASELINE_CM}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption}" font-weight="bold" fill="${COLORS.caption}">▲ CABINA ▲</text>`,
     `<text x="${vehicle.width / 2}" y="${WIDTH_QUOTA_BASELINE_CM}" text-anchor="middle" font-family="${MONO_FONT_FAMILY}" font-size="${FONT.quota}" fill="${COLORS.gridText}">${vehicle.width} cm</text>`,
-    `<text x="${vehicle.width / 2}" y="${round(extent.doorLabelY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption * 0.93}" font-weight="bold" fill="${COLORS.caption}">PORTE POSTERIORI</text>`
+    `<text x="${vehicle.width / 2}" y="${round(doorLabelY)}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="${FONT.caption * 0.93}" font-weight="bold" fill="${COLORS.caption}">PORTE POSTERIORI</text>`
   );
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${EXPORT_BASE_WIDTH}" height="${height}" viewBox="${extent.minX} ${extent.minY} ${round(
-    extent.width
-  )} ${round(extent.height)}"><title>Piano di carico ${escapeXml(vehicle.name)}</title>${parts.join(
+  return parts.join('');
+};
+
+/**
+ * Costruisce lo snapshot SVG autonomo e pulito della **centrale multi-pianale**.
+ *
+ * Tutti gli stalli vengono disegnati affiancati, ciascuno tradotto nella propria
+ * origine di mondo (`utils/bays.ts`): il risultato è un unico vettoriale con uno,
+ * due o tre mezzi, pronto per la copia negli appunti, per la stampa della sola
+ * grafica e per la scheda A4.
+ *
+ * @param bays         Flotta degli stalli, nell'ordine di affiancamento
+ * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
+ */
+export const buildFleetSvg = (bays: DeckBay[], labelDensity: LabelDensity): PianoSnapshot => {
+  // L'inquadratura di flotta include le targhe estese fuori sponda di ogni mezzo:
+  // nessuna scritta può essere tagliata.
+  const extent = getFleetExtent(bays, labelDensity);
+  const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
+  const height = Math.max(1, Math.round(extent.estimatedHeight * pxPerCm));
+
+  const parts: string[] = [];
+
+  // Sfondo bianco pieno (lo snapshot deve restare leggibile su qualsiasi chat).
+  parts.push(
+    `<rect x="${round(extent.minX)}" y="${round(extent.minY)}" width="${round(
+      extent.width
+    )}" height="${round(extent.height)}" fill="${COLORS.background}"/>`
+  );
+
+  // Un blocco `<defs>` unico per i `clipPath` di tutti i colli della flotta:
+  // gli ID sono già univoci per costruzione (contengono l'ID del collo).
+  const clipDefs = bays
+    .flatMap((bay) => bay.items)
+    .map(
+      (item) =>
+        `<clipPath id="${clipIdForItem(item.id)}"><rect width="${round(
+          item.width
+        )}" height="${round(item.length)}"/></clipPath>`
+    )
+    .join('');
+  if (clipDefs.length > 0) parts.push(`<defs>${clipDefs}</defs>`);
+
+  const offsets = bayOffsets(bays);
+  bays.forEach((bay, index) => {
+    const bayExtent = getBayExtent(
+      bay.vehicle,
+      bay.items,
+      labelDensity,
+      bay.notes,
+      bay.plate,
+      offsets[index]
+    );
+    parts.push(
+      `<g transform="translate(${round(offsets[index])}, 0)">${renderBayParts(
+        bay.vehicle,
+        bay.items,
+        labelDensity,
+        bay.notes,
+        bay.plate,
+        bayExtent.doorLabelY,
+        false
+      )}</g>`
+    );
+  });
+
+  const title =
+    bays.length > 1
+      ? `Centrale multi-pianale (${bays.length} mezzi)`
+      : `Piano di carico ${escapeXml(bays[0]?.vehicle.name ?? '')}`;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${EXPORT_BASE_WIDTH}" height="${height}" viewBox="${round(
+    extent.minX
+  )} ${round(extent.minY)} ${round(extent.width)} ${round(extent.height)}"><title>${title}</title>${parts.join(
     ''
+  )}</svg>`;
+
+  return { svg, width: EXPORT_BASE_WIDTH, height };
+};
+
+/**
+ * Costruisce lo snapshot SVG autonomo e pulito di **un solo pianale**: API
+ * storica, conservata perché la scheda di stampa impagina un mezzo per foglio.
+ *
+ * @param vehicle      Configurazione del mezzo
+ * @param items        Colli stivati
+ * @param labelDensity Densità delle etichette (`all` | `client` | `dimensions` | `minimal`)
+ * @param notes        Note laterali di carico da includere nell'immagine
+ * @param plate        Targa / identificativo del mezzo (vuota = nessun badge)
+ */
+export const buildPianoSvg = (
+  vehicle: VehicleConfig,
+  items: PlacedItem[],
+  labelDensity: LabelDensity,
+  notes: SideNote[] = [],
+  plate: string = ''
+): PianoSnapshot => {
+  // L'inquadratura riceve la targa: il `viewBox` include l'ingombro reale del
+  // testo esteso fuori sponda, quindi la scritta non viene mai tagliata.
+  const extent = getPianoExtent(vehicle, items, labelDensity, notes, plate);
+  const pxPerCm = EXPORT_BASE_WIDTH / extent.width;
+  const height = Math.max(1, Math.round(extent.estimatedHeight * pxPerCm));
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${EXPORT_BASE_WIDTH}" height="${height}" viewBox="${round(
+    extent.minX
+  )} ${round(extent.minY)} ${round(extent.width)} ${round(extent.estimatedHeight)}"><title>Piano di carico ${escapeXml(
+    vehicle.name
+  )}</title><rect x="${round(extent.minX)}" y="${round(
+    extent.minY
+  )}" width="${round(extent.width)}" height="${round(
+    extent.estimatedHeight
+  )}" fill="${COLORS.background}"/>${renderBayParts(
+    vehicle,
+    items,
+    labelDensity,
+    notes,
+    plate,
+    extent.doorLabelY,
+    true
   )}</svg>`;
 
   return { svg, width: EXPORT_BASE_WIDTH, height };
@@ -786,33 +973,26 @@ const downloadBlob = (blob: Blob, fileName: string): void => {
 };
 
 /**
- * Copia negli appunti di sistema lo snapshot PNG ad alta risoluzione del
- * pianale (per WhatsApp / Mail). Se l'API Clipboard non è disponibile o viene
- * negata (permessi, contesto non sicuro, browser non compatibile), scarica
- * automaticamente il file `piano-di-carico.png`.
+ * Copia negli appunti di sistema lo snapshot PNG ad alta risoluzione della
+ * **centrale multi-pianale** (per WhatsApp / Mail): uno, due o tre mezzi
+ * affiancati nella stessa immagine, esattamente come sul canvas. Se l'API
+ * Clipboard non è disponibile o viene negata (permessi, contesto non sicuro,
+ * browser non compatibile), scarica automaticamente `piano-di-carico.png`.
  *
  * Non lancia mai: restituisce sempre un esito booleano.
  *
- * @param vehicle      Configurazione del mezzo
- * @param items        Colli stivati
+ * @param bays         Flotta degli stalli, nell'ordine di affiancamento
  * @param labelDensity Densità delle etichette applicata allo snapshot
- * @param notes        Note laterali di carico da riportare nell'immagine
- * @param plate        Targa / identificativo del mezzo, riportato nel badge
  * @returns `true` se l'immagine è finita negli appunti, `false` se è stata scaricata
  */
 export const copyCanvasToClipboard = async (
-  vehicle: VehicleConfig,
-  items: PlacedItem[],
-  labelDensity: LabelDensity,
-  notes: SideNote[] = [],
-  plate: string = ''
+  bays: DeckBay[],
+  labelDensity: LabelDensity
 ): Promise<boolean> => {
   let pngBlob: Blob;
 
   try {
-    pngBlob = await rasterizeSnapshotToPng(
-      buildPianoSvg(vehicle, items, labelDensity, notes, plate)
-    );
+    pngBlob = await rasterizeSnapshotToPng(buildFleetSvg(bays, labelDensity));
   } catch (error) {
     console.error('[export] Generazione dello snapshot PNG non riuscita:', error);
     return false;

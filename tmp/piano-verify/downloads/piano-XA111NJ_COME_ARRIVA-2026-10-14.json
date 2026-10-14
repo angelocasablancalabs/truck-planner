@@ -1,52 +1,58 @@
 {
-  "version": 1,
+  "version": 2,
   "app": "truck-planner",
-  "timestamp": "2026-10-14T09:27:57.933Z",
-  "vehicle": {
-    "id": "bilico_cc",
-    "name": "Bilico frigo Fiori (2,50 × 13,28 m)",
-    "width": 250,
-    "length": 1328
-  },
-  "plate": "XA111NJ COME ARRIVA",
-  "items": [
+  "timestamp": "2026-10-14T15:29:45.848Z",
+  "bays": [
     {
-      "id": "INDU_1791970076832_0_u0un",
-      "code": "INDU",
-      "name": "PLT INDU",
-      "width": 120,
-      "length": 100,
-      "x": 0,
-      "y": 0,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_1791970076832_1_3nw5",
-      "code": "INDU",
-      "name": "PLT INDU",
-      "width": 120,
-      "length": 100,
-      "x": 120,
-      "y": 0,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "EUR_1791970077418_0_w9ld",
-      "code": "EUR",
-      "name": "COOP",
-      "width": 120,
-      "length": 80,
-      "x": 0,
-      "y": 100,
-      "rotation": 90,
-      "color": "#4ADE80",
-      "borderColor": "#334155"
+      "id": "bay-1",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico CC Fiori (2,50 × 13,28 m)",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "XA111NJ COME ARRIVA",
+      "items": [
+        {
+          "id": "INDU_1791991784693_0_gozl",
+          "code": "INDU",
+          "name": "PLT INDU",
+          "width": 120,
+          "length": 100,
+          "x": 0,
+          "y": 0,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_1791991784693_1_ejj0",
+          "code": "INDU",
+          "name": "PLT INDU",
+          "width": 120,
+          "length": 100,
+          "x": 120,
+          "y": 0,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "EUR_1791991785287_0_zhhg",
+          "code": "EUR",
+          "name": "COOP",
+          "width": 120,
+          "length": 80,
+          "x": 0,
+          "y": 100,
+          "rotation": 90,
+          "color": "#4ADE80",
+          "borderColor": "#334155"
+        }
+      ],
+      "notes": []
     }
   ],
-  "notes": [],
+  "activeBayId": "bay-1",
   "labelDensity": "all"
 }

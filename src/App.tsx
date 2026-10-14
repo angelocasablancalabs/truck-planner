@@ -9,8 +9,15 @@ import type {
   SideNote,
   HistorySnapshot,
   ProjectFile,
+  DeckBay,
 } from './types';
-import { VEHICLE_PRESETS, ITEM_BORDER_COLOR } from './constants';
+import {
+  ITEM_BORDER_COLOR,
+  MAX_BAYS,
+  DEFAULT_BAY_ID,
+  createDefaultBay,
+} from './constants';
+import { resolveActiveBay } from './utils/bays';
 import { TruckCanvas } from './components/TruckCanvas';
 import { ControlDeck } from './components/ControlDeck';
 import { ItemInspector } from './components/ItemInspector';
@@ -63,14 +70,35 @@ const HISTORY_LIMIT = 40;
 const SAVE_FEEDBACK_MS = 2000;
 
 /**
- * Copia profonda dello stato del piano: uno snapshot non condivide mai alcun
- * riferimento con lo stato vivo (né tra due fotogrammi distinti).
+ * ID univoco di un collo stivato: prefisso di catalogo + istante di creazione +
+ * suffisso casuale. Vive fuori dal componente perché l'ID nasce da un'azione
+ * dell'operatore (mai durante il render): la funzione resta pura agli occhi del
+ * compilatore React.
+ */
+const makeItemId = (code: string, suffix: string | number = ''): string =>
+  `${code}_${Date.now()}_${suffix}${Math.random().toString(36).slice(2, 6)}`;
+
+/**
+ * Copia profonda della flotta: uno snapshot non condivide mai alcun riferimento
+ * con lo stato vivo (né tra due fotogrammi distinti). Ogni stallo viene copiato
+ * per intero — mezzo, targa, colli e note — così un `Ctrl / Cmd + Z` non può
+ * essere corrotto da mutazioni successive.
+ */
+const cloneBays = (bays: DeckBay[]): DeckBay[] =>
+  bays.map((bay) => ({
+    ...bay,
+    vehicle: { ...bay.vehicle },
+    items: bay.items.map((item) => ({ ...item })),
+    notes: bay.notes.map((note) => ({ ...note })),
+  }));
+
+/**
+ * Copia profonda dello stato della centrale: flotta, mezzo attivo e densità
+ * etichette. È la base di ogni fotogramma della cronologia Undo / Redo.
  */
 const cloneSnapshot = (snapshot: HistorySnapshot): HistorySnapshot => ({
-  items: snapshot.items.map((item) => ({ ...item })),
-  notes: snapshot.notes.map((note) => ({ ...note })),
-  vehicle: { ...snapshot.vehicle },
-  plate: snapshot.plate,
+  bays: cloneBays(snapshot.bays),
+  activeBayId: snapshot.activeBayId,
   labelDensity: snapshot.labelDensity,
 });
 
@@ -88,19 +116,36 @@ const appendSnapshot = (
 };
 
 export default function App() {
-  const [vehicle, setVehicle] = useState<VehicleConfig>(VEHICLE_PRESETS[0]); // Default CC Olandese
-  const [items, setItems] = useState<PlacedItem[]>([]);
+  /* ------------------------------------------------------------------------ *
+   *  CENTRALE MULTI-PIANALE — STATO PRINCIPALE
+   *
+   *  `bays` è la flotta degli stalli (da 1 a `MAX_BAYS` mezzi affiancati nello
+   *  stesso canvas e nello stesso file JSON): ogni stallo porta con sé il proprio
+   *  mezzo, la propria targa, i propri colli e le proprie note, su **coordinate
+   *  locali** al pianale. `activeBayId` indica il **Mezzo Attivo**, l'unico che
+   *  sidebar (`ControlDeck`) e ispettore (`ItemInspector`) comandano: tutte le
+   *  mutazioni della stiva passano da `updateActiveBay`.
+   * ------------------------------------------------------------------------ */
+  const [bays, setBays] = useState<DeckBay[]>([createDefaultBay(DEFAULT_BAY_ID)]);
+  const [activeBayId, setActiveBayId] = useState<string>(DEFAULT_BAY_ID);
   // Selezione multipla: lista ordinata di ID selezionati ([] = nessuna selezione).
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   // Densità delle etichette stampate sui colli (default: nome + quote).
   const [labelDensity, setLabelDensity] = useState<LabelDensity>('all');
-  // Note laterali di carico: avvertenze posizionate a fianco dei bancali.
-  const [notes, setNotes] = useState<SideNote[]>([]);
   // Nota attualmente selezionata (null = nessuna): alimenta il pannello sidebar.
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  // Targa / identificativo del mezzo: campo libero (es. "XA000BB COME ARRIVA").
-  // Alimenta il badge tecnico sopra la Cabina, lo snapshot PNG e la scheda A4.
-  const [vehiclePlate, setVehiclePlate] = useState<string>('');
+
+  /**
+   * Mezzo attivo risolto con fallback sicuro: se l'ID non esiste più (stallo
+   * eliminato da un Undo o da un file aperto) si ricade sul primo della flotta.
+   */
+  const activeBay = resolveActiveBay(bays, activeBayId);
+  // Viste comode sul pianale attivo: sono ciò che sidebar, ispettore e stampa
+  // mostrano come "il piano corrente".
+  const vehicle = activeBay.vehicle;
+  const items = activeBay.items;
+  const notes = activeBay.notes;
+  const vehiclePlate = activeBay.plate;
 
   /* ------------------------------------------------------------------------ *
    *  FILE ATTIVO — SALVATAGGIO DIRETTO IN-PLACE (STILE EXCEL / WORD)
@@ -183,15 +228,15 @@ export default function App() {
   const canRedo = future.length > 0;
 
   /**
-   * Fotografia completa dello stato logico del piano, nello stesso formato del
-   * file di progetto: colli, note, mezzo, targa e densità etichette. È la base
-   * di ogni fotogramma della cronologia, quindi anche l'apertura di un piano
-   * salvato è annullabile in un solo `Ctrl / Cmd + Z` senza lasciare in scena
-   * il mezzo o la targa del file appena letto.
+   * Fotografia completa dello stato logico della centrale, nello stesso formato
+   * del file di progetto: flotta degli stalli (mezzi, targhe, colli e note),
+   * mezzo attivo e densità etichette. È la base di ogni fotogramma della
+   * cronologia, quindi anche l'apertura di un piano salvato — o l'aggiunta e
+   * l'eliminazione di un mezzo — è annullabile in un solo `Ctrl / Cmd + Z`.
    */
   const captureSnapshot = useCallback(
-    (): HistorySnapshot => ({ items, notes, vehicle, plate: vehiclePlate, labelDensity }),
-    [items, notes, vehicle, vehiclePlate, labelDensity]
+    (): HistorySnapshot => ({ bays, activeBayId, labelDensity }),
+    [bays, activeBayId, labelDensity]
   );
 
   /**
@@ -236,18 +281,19 @@ export default function App() {
   /** Ripristina uno snapshot completo in scena, ripulendo le selezioni orfane. */
   const restoreSnapshot = useCallback((snapshot: HistorySnapshot) => {
     const restored = cloneSnapshot(snapshot);
-    setItems(restored.items);
-    setNotes(restored.notes);
-    setVehicle(restored.vehicle);
-    setVehiclePlate(restored.plate);
+    setBays(restored.bays);
+    // Il mezzo attivo è sempre valido: se lo stallo ripristinato non esiste più
+    // si ricade sul primo della flotta, così l'app non resta mai senza bersaglio.
+    const restoredActive = resolveActiveBay(restored.bays, restored.activeBayId);
+    setActiveBayId(restoredActive.id);
     setLabelDensity(restored.labelDensity);
-    // Selezione: sopravvivono solo gli ID ancora presenti nello stato ripristinato,
-    // così nessun pannello resta appeso a un collo o a una nota che non esistono più.
-    setSelectedItemIds((prev) =>
-      prev.filter((id) => restored.items.some((item) => item.id === id))
-    );
+    // Selezione: sopravvivono solo gli ID ancora presenti nello **stallo attivo**
+    // ripristinato, così nessun pannello resta appeso a un collo o a una nota che
+    // non esistono più (o che vivono su un altro mezzo).
+    const activeIds = new Set(restoredActive.items.map((item) => item.id));
+    setSelectedItemIds((prev) => prev.filter((id) => activeIds.has(id)));
     setSelectedNoteId((prev) =>
-      prev !== null && restored.notes.some((note) => note.id === prev) ? prev : null
+      prev !== null && restoredActive.notes.some((note) => note.id === prev) ? prev : null
     );
   }, []);
 
@@ -274,23 +320,149 @@ export default function App() {
     setSelectedItemIds(ids);
   }, []);
 
+  /* ------------------------------------------------------------------------ *
+   *  DELEGA AL MEZZO ATTIVO (CENTRALE MULTI-PIANALE)
+   *
+   *  Sidebar e ispettore comandano **sempre e solo** lo stallo attivo: ogni
+   *  mutazione della stiva passa da `updateActiveBay`, che riscrive il solo
+   *  stallo interessato lasciando intatti gli altri due. Una sola porta d'ingresso
+   *  per colli, note, targa e configurazione del mezzo.
+   * ------------------------------------------------------------------------ */
+  const updateActiveBay = useCallback(
+    (patch: Partial<DeckBay>) => {
+      setBays((prev) =>
+        prev.map((bay) => (bay.id === activeBayId ? { ...bay, ...patch } : bay))
+      );
+    },
+    [activeBayId]
+  );
+
   /**
-   * Cambio di configurazione del mezzo (preset di catalogo o dimensioni libere
-   * del mezzo personalizzato): il veicolo fa parte del piano di carico salvato
-   * su `.json`, quindi la modifica va segnalata come non salvata. La stessa
-   * regola vale per la targa, che finisce nel file di progetto, nel badge sopra
-   * la Cabina e nell'intestazione della scheda A4.
+   * Aggiornamento dei colli del **mezzo attivo**, con accesso alla lista corrente:
+   * è il mattone su cui sono costruite tutte le mutazioni della stiva.
    */
-  const handleSelectVehicle = useCallback((next: VehicleConfig) => {
-    setVehicle(next);
-    setHasUnsavedChanges(true);
+  const updateActiveItems = useCallback(
+    (updater: (prevItems: PlacedItem[]) => PlacedItem[]) => {
+      setBays((prev) =>
+        prev.map((bay) => (bay.id === activeBayId ? { ...bay, items: updater(bay.items) } : bay))
+      );
+    },
+    [activeBayId]
+  );
+
+  /** Aggiornamento delle note laterali del **mezzo attivo**. */
+  const updateActiveNotes = useCallback(
+    (updater: (prevNotes: SideNote[]) => SideNote[]) => {
+      setBays((prev) =>
+        prev.map((bay) => (bay.id === activeBayId ? { ...bay, notes: updater(bay.notes) } : bay))
+      );
+    },
+    [activeBayId]
+  );
+
+  /**
+   * Cambio del **Mezzo Attivo** (click su una pillola della sidebar o sullo
+   * stallo nel canvas): la selezione in corso viene azzerata, perché colli e note
+   * appartengono al pianale precedente — nessuna selezione orfana può sopravvivere
+   * al passaggio di mezzo.
+   */
+  const handleSelectBay = useCallback((bayId: string) => {
+    setActiveBayId(bayId);
+    setSelectedItemIds([]);
+    setSelectedNoteId(null);
   }, []);
 
-  /** Aggiornamento della targa: campo del piano, quindi modifica non salvata. */
-  const handleUpdatePlate = useCallback((value: string) => {
-    setVehiclePlate(value);
-    setHasUnsavedChanges(true);
+  /**
+   * **Aggiunge un mezzo** alla centrale (massimo `MAX_BAYS`): nasce di fabbrica
+   * (Bilico CC Fiori 13,28 m, targa vuota, pianale vuoto) e diventa subito il
+   * Mezzo Attivo, così l'operatore può caricarlo senza un click in più. L'intera
+   * operazione è **un solo passo di Undo**.
+   */
+  const handleAddBay = useCallback(() => {
+    if (bays.length >= MAX_BAYS) return;
+
+    // Fotogramma PRIMA della mutazione: aggiunta ed eliminazione di un mezzo
+    // sono passi pieni della cronologia.
+    pushSnapshot(captureSnapshot());
+
+    const newBay = createDefaultBay(`bay-${Date.now()}`);
+    setBays((prev) => (prev.length >= MAX_BAYS ? prev : [...prev, newBay]));
+    setActiveBayId(newBay.id);
+    setSelectedItemIds([]);
+    setSelectedNoteId(null);
+  }, [bays.length, pushSnapshot, captureSnapshot]);
+
+  /**
+   * **Elimina un mezzo** dalla centrale. L'ultimo stallo rimasto non è mai
+   * eliminabile (la centrale deve sempre avere almeno un pianale) e, se il mezzo
+   * contiene colli o note, viene chiesta una conferma antipanico prima di
+   * procedere. Se lo stallo eliminato era quello attivo, la selezione passa al
+   * primo mezzo rimasto. Anche questa operazione è **un solo passo di Undo**.
+   */
+  const handleDeleteBay = useCallback(
+    (bayId: string) => {
+      if (bays.length <= 1) return;
+
+      const target = bays.find((bay) => bay.id === bayId);
+      if (!target) return;
+
+      const hasContent = target.items.length > 0 || target.notes.length > 0;
+      if (
+        hasContent &&
+        !window.confirm(
+          `Il mezzo "${target.plate || 'senza targa'}" contiene ${target.items.length} colli e ${target.notes.length} note.\nVuoi eliminare il mezzo e tutto il suo carico?`
+        )
+      ) {
+        return;
+      }
+
+      // Fotogramma PRIMA della mutazione.
+      pushSnapshot(captureSnapshot());
+
+      const remaining = bays.filter((bay) => bay.id !== bayId);
+      setBays(remaining);
+      if (target.id === activeBayId) {
+        setActiveBayId(remaining[0].id);
+      }
+      setSelectedItemIds([]);
+      setSelectedNoteId(null);
+    },
+    [bays, activeBayId, pushSnapshot, captureSnapshot]
+  );
+
+  /**
+   * Svuota integralmente la centrale riportandola al piano di fabbrica: un solo
+   * stallo (`bay-1`) con il mezzo di default e nessun carico.
+   */
+  const resetFleet = useCallback(() => {
+    const freshBay = createDefaultBay(DEFAULT_BAY_ID);
+    setBays([freshBay]);
+    setActiveBayId(freshBay.id);
   }, []);
+
+  /**
+   * Cambio di configurazione del **mezzo attivo** (preset di catalogo o
+   * dimensioni libere del mezzo personalizzato): il veicolo fa parte del piano di
+   * carico salvato su `.json`, quindi la modifica va segnalata come non salvata.
+   * La stessa regola vale per la targa, che finisce nel file di progetto, nel
+   * badge sopra la Cabina e nell'intestazione della scheda A4.
+   */
+  const handleSelectVehicle = useCallback(
+    (next: VehicleConfig) => {
+      updateActiveBay({ vehicle: next });
+      setHasUnsavedChanges(true);
+    },
+    [updateActiveBay]
+  );
+
+  /** Aggiornamento della targa del mezzo attivo: modifica non salvata. */
+  const handleUpdatePlate = useCallback(
+    (value: string) => {
+      updateActiveBay({ plate: value });
+      setHasUnsavedChanges(true);
+    },
+    [updateActiveBay]
+  );
 
   // Aggiungi un nuovo collo al pianale, nel primo slot libero disponibile
   const handleAddItem = (pallet: PalletDefinition, options: AddItemOptions = {}) => {
@@ -304,7 +476,7 @@ export default function App() {
     const spawn = findSmartSpawnPosition(width, length, vehicle, items);
 
     const newItem: PlacedItem = {
-      id: `${pallet.code}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      id: makeItemId(pallet.code),
       code: pallet.code,
       name: options.name ?? pallet.name,
       width,
@@ -319,7 +491,7 @@ export default function App() {
       borderColor: ITEM_BORDER_COLOR,
     };
 
-    setItems((prev) => [...prev, newItem]);
+    updateActiveItems((prev) => [...prev, newItem]);
     // Nessuna auto-selezione: il collo viene solo disegnato sul pianale e
     // l'HUD resta pulito. La card fluttuante di ispezione (`ItemInspector`)
     // comparirà solo quando l'utente selezionerà esplicitamente il collo.
@@ -370,9 +542,8 @@ export default function App() {
 
       const itemName = name?.trim() || pallet.name;
       const itemColor = color || pallet.color;
-      const stamp = Date.now();
 
-      setItems((prev) => {
+      updateActiveItems((prev) => {
         // Accumulatore locale: è il pianale "corrente" su cui calcolare gli spawn.
         let current = [...prev];
 
@@ -380,7 +551,7 @@ export default function App() {
           const spawn = findSmartSpawnPosition(width, length, vehicle, current);
 
           const newItem: PlacedItem = {
-            id: `${pallet.code}_${stamp}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+            id: makeItemId(pallet.code, `${i}_`),
             code: pallet.code,
             name: itemName,
             width,
@@ -402,32 +573,35 @@ export default function App() {
 
       setSelectedItemIds([]);
     },
-    [vehicle, pushSnapshot, captureSnapshot]
+    [vehicle, updateActiveItems, pushSnapshot, captureSnapshot]
   );
 
   /**
    * Aggiornamento simultaneo delle coordinate di più colli (drag singolo e di
    * gruppo): un solo setState per frame, con patch applicata per ID.
    */
-  const handleUpdateItemsPos = useCallback((updates: ItemPositionUpdate[]) => {
-    if (updates.length === 0) return;
+  const handleUpdateItemsPos = useCallback(
+    (updates: ItemPositionUpdate[]) => {
+      if (updates.length === 0) return;
 
-    setItems((prev) => {
-      const byId = new Map(updates.map((u) => [u.id, u]));
-      let changed = false;
+      updateActiveItems((prev) => {
+        const byId = new Map(updates.map((u) => [u.id, u]));
+        let changed = false;
 
-      const next = prev.map((item) => {
-        const update = byId.get(item.id);
-        if (!update) return item;
-        if (update.x === item.x && update.y === item.y) return item;
-        changed = true;
-        return { ...item, x: update.x, y: update.y };
+        const next = prev.map((item) => {
+          const update = byId.get(item.id);
+          if (!update) return item;
+          if (update.x === item.x && update.y === item.y) return item;
+          changed = true;
+          return { ...item, x: update.x, y: update.y };
+        });
+
+        // Nessuna variazione reale: nessun nuovo riferimento, nessun render.
+        return changed ? next : prev;
       });
-
-      // Nessuna variazione reale: nessun nuovo riferimento, nessun render.
-      return changed ? next : prev;
-    });
-  }, []);
+    },
+    [updateActiveItems]
+  );
 
   /**
    * Aggiornamento proprietà (Nome/Cliente, palette colori, ...) su uno o più
@@ -442,11 +616,11 @@ export default function App() {
       pushSnapshot(captureSnapshot());
 
       const idSet = new Set(ids);
-      setItems((prev) =>
+      updateActiveItems((prev) =>
         prev.map((item) => (idSet.has(item.id) ? { ...item, ...updates } : item))
       );
     },
-    [pushSnapshot, captureSnapshot]
+    [updateActiveItems, pushSnapshot, captureSnapshot]
   );
 
   // Rotazione di 90 gradi ancorata al baricentro, con riallineamento magnetico.
@@ -458,7 +632,7 @@ export default function App() {
     // Fotogramma PRIMA della mutazione: la rotazione (anche di gruppo) è un passo.
     pushSnapshot(captureSnapshot());
 
-    setItems((prev) =>
+    updateActiveItems((prev) =>
       prev.map((item) => {
         if (!idSet.has(item.id)) return item;
 
@@ -504,7 +678,7 @@ export default function App() {
         };
       })
     );
-  }, [selectedItemIds, vehicle, pushSnapshot, captureSnapshot]);
+  }, [selectedItemIds, vehicle, updateActiveItems, pushSnapshot, captureSnapshot]);
 
   /**
    * Spinta a Battuta (Sweep Docking): spinge rigidamente il blocco dei colli
@@ -529,7 +703,7 @@ export default function App() {
       pushSnapshot(captureSnapshot());
 
       const idSet = new Set(selectedItemIds);
-      setItems((prev) =>
+      updateActiveItems((prev) =>
         prev.map((item) =>
           idSet.has(item.id)
             ? { ...item, x: toPrecision(item.x + dx), y: toPrecision(item.y + dy) }
@@ -537,7 +711,7 @@ export default function App() {
         )
       );
     },
-    [items, selectedItemIds, vehicle, pushSnapshot, captureSnapshot]
+    [items, selectedItemIds, vehicle, updateActiveItems, pushSnapshot, captureSnapshot]
   );
 
   // Cancellazione di TUTTI i colli selezionati (batch) + svuotamento selezione.
@@ -548,15 +722,15 @@ export default function App() {
     pushSnapshot(captureSnapshot());
 
     const idSet = new Set(selectedItemIds);
-    setItems((prev) => prev.filter((item) => !idSet.has(item.id)));
+    updateActiveItems((prev) => prev.filter((item) => !idSet.has(item.id)));
     setSelectedItemIds([]);
-  }, [selectedItemIds, pushSnapshot, captureSnapshot]);
+  }, [selectedItemIds, updateActiveItems, pushSnapshot, captureSnapshot]);
 
   /**
    * Avvia un nuovo piano di carico da zero:
    * - Chiede conferma se ci sono modifiche non salvate (`hasUnsavedChanges`);
-   * - Ripristina il mezzo di fabbrica (Bilico CC Fiori 13,28 m);
-   * - Sbianca la targa, i colli e le note laterali;
+   * - Ripristina la centrale al **singolo mezzo di fabbrica** (`bay-1`, Bilico CC
+   *   Fiori 13,28 m) con targa vuota, nessun collo e nessuna nota;
    * - Sgancia il file attivo e azzera le pile di Undo/Redo.
    */
   const handleNewProject = useCallback(() => {
@@ -569,10 +743,7 @@ export default function App() {
       return;
     }
 
-    setVehicle(VEHICLE_PRESETS[0]);
-    setVehiclePlate('');
-    setItems([]);
-    setNotes([]);
+    resetFleet();
     setLabelDensity('all');
     setSelectedItemIds([]);
     setSelectedNoteId(null);
@@ -581,23 +752,24 @@ export default function App() {
     setPast([]);
     setFuture([]);
     setHasUnsavedChanges(false);
-  }, [hasUnsavedChanges]);
+  }, [hasUnsavedChanges, resetFleet]);
 
   /**
-   * Svuotamento del pianale ("Svuota"): un solo passo di Undo.
+   * Svuotamento del pianale attivo ("Svuota"): un solo passo di Undo.
    *
-   * Azzera colli **e** note laterali — il lavoro caricato sul pianale — mentre
-   * mezzo e targa restano intatti: sono la configurazione del veicolo, non il
-   * carico, quindi non vengono toccati. Il file attivo resta agganciato: un
-   * `Ctrl / Cmd + S` successivo riscrive lo stesso file con il pianale vuoto.
+   * Azzera colli **e** note laterali **del solo Mezzo Attivo** — il lavoro
+   * caricato sul pianale — mentre mezzo e targa restano intatti: sono la
+   * configurazione del veicolo, non il carico, quindi non vengono toccati. Gli
+   * altri mezzi della flotta non vengono minimamente sfiorati. Il file attivo
+   * resta agganciato: un `Ctrl / Cmd + S` successivo riscrive lo stesso file con
+   * il pianale vuoto.
    */
   const handleClearAll = useCallback(() => {
     pushSnapshot(captureSnapshot());
-    setItems([]);
-    setNotes([]);
+    updateActiveBay({ items: [], notes: [] });
     setSelectedItemIds([]);
     setSelectedNoteId(null);
-  }, [pushSnapshot, captureSnapshot]);
+  }, [updateActiveBay, pushSnapshot, captureSnapshot]);
 
   /* ------------------------------------------------------------------------ *
    *  SALVA & APRI PIANO DI CARICO (.json)
@@ -627,13 +799,11 @@ export default function App() {
     isNewFile: boolean;
   } | null> => {
     const project: ProjectFile = {
-      version: 1,
+      version: 2,
       app: 'truck-planner',
       timestamp: new Date().toISOString(),
-      vehicle,
-      plate: vehiclePlate,
-      items,
-      notes,
+      bays,
+      activeBayId: activeBay.id,
       labelDensity,
     };
 
@@ -666,7 +836,7 @@ export default function App() {
       window.alert(`Salvataggio del piano non riuscito.\n\n${message}`);
       return null;
     }
-  }, [vehicle, vehiclePlate, items, notes, labelDensity, fileHandle]);
+  }, [bays, activeBay.id, labelDensity, fileHandle]);
 
   /**
    * "Salva con nome": salva il piano di carico su un **nuovo file**, anche
@@ -685,13 +855,11 @@ export default function App() {
     isNewFile: boolean;
   } | null> => {
     const project: ProjectFile = {
-      version: 1,
+      version: 2,
       app: 'truck-planner',
       timestamp: new Date().toISOString(),
-      vehicle,
-      plate: vehiclePlate,
-      items,
-      notes,
+      bays,
+      activeBayId: activeBay.id,
       labelDensity,
     };
 
@@ -723,16 +891,20 @@ export default function App() {
       window.alert(`Salvataggio del piano non riuscito.\n\n${message}`);
       return null;
     }
-  }, [vehicle, vehiclePlate, items, notes, labelDensity]);
+  }, [bays, activeBay.id, labelDensity]);
 
   /**
    * Apre un piano di carico salvato in precedenza e lo mette in scena.
    *
    * Il fotogramma viene registrato **prima** del ripristino: se l'apertura è
-   * involontaria, `Ctrl / Cmd + Z` riporta istantaneamente il pianale allo stato
-   * precedente (colli, note e — come per ogni Undo — la selezione ripulita).
-   * La lista dei colli e quella delle note vengono copiate in profondità, così
-   * il file appena letto non condivide riferimenti con lo stato vivo.
+   * involontaria, `Ctrl / Cmd + Z` riporta istantaneamente la centrale allo stato
+   * precedente (flotta, mezzo attivo e — come per ogni Undo — la selezione
+   * ripulita). La flotta viene copiata in profondità, così il file appena letto
+   * non condivide riferimenti con lo stato vivo.
+   *
+   * Il file può essere **v2** (centrale multi-pianale) oppure **v1** (pianale
+   * singolo, migrato al volo in un unico stallo da `utils/fileStorage.ts`): in
+   * entrambi i casi qui arriva già una flotta normalizzata.
    *
    * `handle` è l'handle della File System Access API (o `null` col selettore
    * classico) e `fileName` il nome mostrato come "File attivo": da qui in avanti
@@ -743,10 +915,16 @@ export default function App() {
       // Fotogramma PRIMA del ripristino: l'apertura è un passo di Undo.
       pushSnapshot(captureSnapshot());
 
-      setVehicle(project.vehicle);
-      setVehiclePlate(project.plate ?? '');
-      setItems(project.items.map((item) => ({ ...item })));
-      setNotes((project.notes ?? []).map((note) => ({ ...note })));
+      // Flotta copiata in profondità: il file non condivide riferimenti con lo
+      // stato vivo. Una flotta vuota (file anomalo) ricade sul mezzo di fabbrica.
+      const loadedBays = project.bays.map((bay) => ({
+        ...bay,
+        vehicle: { ...bay.vehicle },
+        items: bay.items.map((item) => ({ ...item })),
+        notes: bay.notes.map((note) => ({ ...note })),
+      }));
+      setBays(loadedBays);
+      setActiveBayId(resolveActiveBay(loadedBays, project.activeBayId ?? '').id);
       setLabelDensity(project.labelDensity ?? 'all');
 
       // Il file attivo diventa quello appena aperto (handle compreso).
@@ -798,10 +976,10 @@ export default function App() {
       };
       // Fotogramma PRIMA della mutazione: la creazione della nota è un passo.
       pushSnapshot(captureSnapshot());
-      setNotes((prev) => [...prev, newNote]);
+      updateActiveNotes((prev) => [...prev, newNote]);
       setSelectedNoteId(newNote.id);
     },
-    [pushSnapshot, captureSnapshot]
+    [updateActiveNotes, pushSnapshot, captureSnapshot]
   );
 
   /** Aggiorna testo, colore, corpo o misure di una nota. */
@@ -809,9 +987,11 @@ export default function App() {
     (id: string, updates: Partial<SideNote>) => {
       // Fotogramma PRIMA della mutazione: ogni modifica è un passo di Undo.
       pushSnapshot(captureSnapshot());
-      setNotes((prev) => prev.map((note) => (note.id === id ? { ...note, ...updates } : note)));
+      updateActiveNotes((prev) =>
+        prev.map((note) => (note.id === id ? { ...note, ...updates } : note))
+      );
     },
-    [pushSnapshot, captureSnapshot]
+    [updateActiveNotes, pushSnapshot, captureSnapshot]
   );
 
   /** Elimina una nota: la selezione viene azzerata per non lasciare riferimenti. */
@@ -819,10 +999,10 @@ export default function App() {
     (id: string) => {
       // Fotogramma PRIMA della mutazione: l'eliminazione è un passo di Undo.
       pushSnapshot(captureSnapshot());
-      setNotes((prev) => prev.filter((note) => note.id !== id));
+      updateActiveNotes((prev) => prev.filter((note) => note.id !== id));
       setSelectedNoteId(null);
     },
-    [pushSnapshot, captureSnapshot]
+    [updateActiveNotes, pushSnapshot, captureSnapshot]
   );
 
   /**
@@ -835,13 +1015,16 @@ export default function App() {
    * Il canvas apre il gesto con `onBeginHistoryGesture` al `pointerDown` e lo
    * convalida al `pointerUp` (l'intero trascinamento = 1 passo di Undo).
    */
-  const handleUpdateNotePos = useCallback((id: string, x: number, y: number) => {
-    setNotes((prev) =>
-      prev.map((note) =>
-        note.id === id ? { ...note, x: toPrecision(x), y: toPrecision(y) } : note
-      )
-    );
-  }, []);
+  const handleUpdateNotePos = useCallback(
+    (id: string, x: number, y: number) => {
+      updateActiveNotes((prev) =>
+        prev.map((note) =>
+          note.id === id ? { ...note, x: toPrecision(x), y: toPrecision(y) } : note
+        )
+      );
+    },
+    [updateActiveNotes]
+  );
 
   /**
    * Ridimensionamento della card di nota dalla maniglia dell'angolo
@@ -854,7 +1037,7 @@ export default function App() {
    */
   const handleUpdateNoteSize = useCallback(
     (id: string, size: { width: number; height: number }) => {
-      setNotes((prev) =>
+      updateActiveNotes((prev) =>
         prev.map((note) =>
           note.id === id
             ? { ...note, width: toPrecision(size.width), height: toPrecision(size.height) }
@@ -862,7 +1045,7 @@ export default function App() {
         )
       );
     },
-    []
+    [updateActiveNotes]
   );
 
   // Gestione scorciatoie da tastiera (Ctrl/Cmd+S, Spazio, Canc e Undo / Redo)
@@ -978,22 +1161,21 @@ export default function App() {
         id="screen-app"
         className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans print:hidden"
       >
-        {/* Sinistra: Telaio Camion.
+        {/* Sinistra: Telaio Camion multi-pianale.
             `relative`: àncora la colonna HUD fluttuante (`ItemInspector` per i
             colli selezionati e, come appendice, `NoteInspector` per la nota in
             editing) all'area del canvas, senza consumare larghezza di layout —
-            requisito indispensabile in ottica multi-pianale (fino a 3 camion
-            affiancati). */}
+            requisito indispensabile ora che fino a `MAX_BAYS` camion vivono
+            affiancati nello stesso canvas. */}
         <div className="flex-1 h-full relative">
           <TruckCanvas
-            vehicle={vehicle}
-            items={items}
-            notes={notes}
-            plate={vehiclePlate}
+            bays={bays}
+            activeBayId={activeBay.id}
             selectedItemIds={selectedItemIds}
             selectedNoteId={selectedNoteId}
             labelDensity={labelDensity}
             onChangeLabelDensity={setLabelDensity}
+            onSelectBay={handleSelectBay}
             onSelectItems={handleSelectItems}
             onSelectNote={handleSelectNote}
             onUpdateNotePos={handleUpdateNotePos}
@@ -1039,6 +1221,11 @@ export default function App() {
         {/* Destra: Plancia di Comando */}
         <div className="w-80 md:w-96 h-full flex-shrink-0">
           <ControlDeck
+            bays={bays}
+            activeBayId={activeBay.id}
+            onSelectBay={handleSelectBay}
+            onAddBay={handleAddBay}
+            onDeleteBay={handleDeleteBay}
             vehicle={vehicle}
             onSelectVehicle={handleSelectVehicle}
             plate={vehiclePlate}
@@ -1058,7 +1245,6 @@ export default function App() {
             canRedo={canRedo}
             onUndo={handleUndo}
             onRedo={handleRedo}
-            notes={notes}
             items={items}
             labelDensity={labelDensity}
             selectedItemIds={selectedItemIds}
@@ -1067,14 +1253,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* Scheda di carico A4: presente nel DOM, visibile solo su carta. */}
-      <PrintReport
-        vehicle={vehicle}
-        items={items}
-        notes={notes}
-        plate={vehiclePlate}
-        labelDensity={labelDensity}
-      />
+      {/* Scheda di carico A4: presente nel DOM, visibile solo su carta.
+          In "Scheda Completa" genera **una pagina per ciascun mezzo** della
+          centrale; nella modalità "Solo Grafica" i pianali vengono affiancati su
+          un unico foglio A4 panoramico. */}
+      <PrintReport bays={bays} labelDensity={labelDensity} />
     </>
   );
 }

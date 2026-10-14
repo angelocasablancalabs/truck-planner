@@ -1,99 +1,105 @@
 {
-  "version": 1,
+  "version": 2,
   "app": "truck-planner",
   "timestamp": "2026-03-04T08:15:00.000Z",
-  "vehicle": {
-    "id": "bilico_cc",
-    "name": "Bilico frigo Fiori",
-    "width": 250,
-    "length": 1328
-  },
-  "plate": "XZ999ZZ",
-  "items": [
+  "bays": [
     {
-      "id": "INDU_fixture_0",
-      "code": "INDU",
-      "name": "PRODIVA",
-      "width": 120,
-      "length": 100,
-      "x": 0,
-      "y": 0,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_fixture_1",
-      "code": "INDU",
-      "name": "PRODIVA",
-      "width": 120,
-      "length": 100,
-      "x": 120,
-      "y": 0,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_fixture_2",
-      "code": "INDU",
-      "name": "PRODIVA",
-      "width": 120,
-      "length": 100,
-      "x": 0,
-      "y": 100,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_fixture_3",
-      "code": "INDU",
-      "name": "CONAD",
-      "width": 120,
-      "length": 100,
-      "x": 120,
-      "y": 100,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_fixture_4",
-      "code": "INDU",
-      "name": "CONAD",
-      "width": 120,
-      "length": 100,
-      "x": 0,
-      "y": 200,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
-    },
-    {
-      "id": "INDU_fixture_5",
-      "code": "INDU",
-      "name": "CONAD",
-      "width": 120,
-      "length": 100,
-      "x": 120,
-      "y": 200,
-      "rotation": 90,
-      "color": "#E2E8F0",
-      "borderColor": "#334155"
+      "id": "bay-1",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico frigo Fiori",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "XZ999ZZ",
+      "items": [
+        {
+          "id": "INDU_fixture_0",
+          "code": "INDU",
+          "name": "PRODIVA",
+          "width": 120,
+          "length": 100,
+          "x": 0,
+          "y": 0,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_fixture_1",
+          "code": "INDU",
+          "name": "PRODIVA",
+          "width": 120,
+          "length": 100,
+          "x": 120,
+          "y": 0,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_fixture_2",
+          "code": "INDU",
+          "name": "PRODIVA",
+          "width": 120,
+          "length": 100,
+          "x": 0,
+          "y": 100,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_fixture_3",
+          "code": "INDU",
+          "name": "CONAD",
+          "width": 120,
+          "length": 100,
+          "x": 120,
+          "y": 100,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_fixture_4",
+          "code": "INDU",
+          "name": "CONAD",
+          "width": 120,
+          "length": 100,
+          "x": 0,
+          "y": 200,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        },
+        {
+          "id": "INDU_fixture_5",
+          "code": "INDU",
+          "name": "CONAD",
+          "width": 120,
+          "length": 100,
+          "x": 120,
+          "y": 200,
+          "rotation": 90,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        }
+      ],
+      "notes": [
+        {
+          "id": "note_fixture_1",
+          "x": 280,
+          "y": 40,
+          "content": "Bancali poco stabili: attenzione durante il carico.",
+          "color": "#E2E8F0",
+          "borderColor": "#94A3B8",
+          "width": 140,
+          "fontSize": 14
+        }
+      ]
     }
   ],
-  "notes": [
-    {
-      "id": "note_fixture_1",
-      "x": 280,
-      "y": 40,
-      "content": "Bancali poco stabili: attenzione durante il carico.",
-      "color": "#E2E8F0",
-      "borderColor": "#94A3B8",
-      "width": 140,
-      "fontSize": 14
-    }
-  ],
+  "activeBayId": "bay-1",
   "labelDensity": "minimal"
 }

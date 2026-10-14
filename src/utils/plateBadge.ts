@@ -121,10 +121,14 @@ export const PLATE_BADGE_FONT_FAMILY = 'SFMono-Regular, Menlo, Consolas, monospa
 
 /**
  * Stacco (cm) tra il fondo del glifo della targa e l'inizio di `▲ CABINA ▲`.
- * Vale ~5 px a schermo nella vista d'insieme: è la distanza che rende leggibile
- * la gerarchia senza che la targa sembri appoggiata sulla didascalia.
+ *
+ * Non è solo estetico: il riquadro reale del glifo (`getBoundingClientRect`) è
+ * più alto della stima tipografica `ascendente + discendente`, quindi uno stacco
+ * troppo sottile lascia i due testi **a contatto** a schermo. 20 cm garantiscono
+ * la separazione visiva a qualunque livello di zoom, mantenendo la gerarchia
+ * (targa a 30 px, didascalia a 15 px) senza avvicinarli.
  */
-const PLATE_BADGE_CAPTION_GAP_CM = 13;
+const PLATE_BADGE_CAPTION_GAP_CM = 20;
 
 /**
  * Ingombro (cm) del glifo della targa al corpo massimo, sopra e sotto la propria

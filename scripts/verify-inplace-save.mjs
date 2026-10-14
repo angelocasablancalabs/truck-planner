@@ -87,34 +87,47 @@ const VEHICLE = { id: 'bilico_cc', name: 'Bilico frigo Fiori', width: 250, lengt
 /** Bordo rigido di ogni collo (`ITEM_BORDER_COLOR`). */
 const ITEM_BORDER_COLOR = '#334155';
 
-/** Piano di carico usato come "file su disco" (3 colli, targa `XZ999ZZ`). */
+/** Piano di carico usato come "file su disco" (3 colli, targa `XZ999ZZ`).
+ *  Schema **v2** della centrale multi-pianale: un unico stallo `bay-1`. */
 const FIXTURE_PROJECT = {
-  version: 1,
+  version: 2,
   app: 'truck-planner',
   timestamp: '2026-04-01T07:30:00.000Z',
-  vehicle: VEHICLE,
-  plate: 'XZ999ZZ',
-  items: Array.from({ length: 3 }, (_, i) => ({
-    id: `INDU_fixture_${i}`,
-    code: 'INDU',
-    name: i === 2 ? 'COOP' : 'PRODIVA',
-    width: 120,
-    length: 100,
-    x: (i % 2) * 120,
-    y: Math.floor(i / 2) * 100,
-    rotation: 90,
-    color: '#E2E8F0',
-    borderColor: ITEM_BORDER_COLOR,
-  })),
-  notes: [],
+  bays: [
+    {
+      id: 'bay-1',
+      vehicle: VEHICLE,
+      plate: 'XZ999ZZ',
+      items: Array.from({ length: 3 }, (_, i) => ({
+        id: `INDU_fixture_${i}`,
+        code: 'INDU',
+        name: i === 2 ? 'COOP' : 'PRODIVA',
+        width: 120,
+        length: 100,
+        x: (i % 2) * 120,
+        y: Math.floor(i / 2) * 100,
+        rotation: 90,
+        color: '#E2E8F0',
+        borderColor: ITEM_BORDER_COLOR,
+      })),
+      notes: [],
+    },
+  ],
+  activeBayId: 'bay-1',
   labelDensity: 'all',
 };
 
 /** Piano senza targa: serve al fallback di download del test unitario. */
-const UNPLATED_PROJECT = { ...FIXTURE_PROJECT, plate: '' };
+const UNPLATED_PROJECT = {
+  ...FIXTURE_PROJECT,
+  bays: [{ ...FIXTURE_PROJECT.bays[0], plate: '' }],
+};
 /** Targa riconoscibile del fallback unitario: identifica il file scaricato. */
 const UNIT_FALLBACK_PLATE = 'UNIT9';
-const UNIT_FALLBACK_PROJECT = { ...FIXTURE_PROJECT, plate: UNIT_FALLBACK_PLATE };
+const UNIT_FALLBACK_PROJECT = {
+  ...FIXTURE_PROJECT,
+  bays: [{ ...FIXTURE_PROJECT.bays[0], plate: UNIT_FALLBACK_PLATE }],
+};
 const UNIT_FALLBACK_FILE_NAME = `piano-${UNIT_FALLBACK_PLATE}-${TODAY}.json`;
 
 let passed = 0;
@@ -441,7 +454,8 @@ const main = async () => {
     /* --- 1) SOSTITUZIONE "2D" → "CAD" -------------------------------------- */
     const branding = await cdp.eval(`
       const deck = document.querySelector('.control-deck');
-      const subtitle = deck.querySelector('h1 + p');
+      // Sottotitolo della plancia: il primo <p> dentro il blocco del titolo.
+      const subtitle = deck.querySelector('h1')?.parentElement?.querySelector('p');
       const printSubtitle = document.querySelector('#print-report header p');
       return {
         title: document.title,
@@ -461,9 +475,9 @@ const main = async () => {
     check(
       'Sottotitolo della plancia: `Gestione Carico CAD Vettoriale`',
       branding.subtitle === 'Gestione Carico CAD Vettoriale' &&
-        branding.subtitleClass.includes('text-xs') &&
+        branding.subtitleClass.includes('text-[11px]') &&
         branding.subtitleClass.includes('text-slate-500'),
-      `"${branding.subtitle}"`
+      `"${branding.subtitle}" · ${branding.subtitleClass}`
     );
     check(
       'Sottotitolo della scheda A4: `Truck Planner CAD — data • ora`',
@@ -565,8 +579,8 @@ const main = async () => {
       });
       const opened = await mod.openProjectWithPicker();
       out.open = {
-        items: opened.project.items.length,
-        plate: opened.project.plate,
+        items: opened.project.bays[0].items.length,
+        plate: opened.project.bays[0].plate,
         fileName: opened.fileName,
         handleName: opened.handle?.name ?? null,
       };
@@ -622,14 +636,16 @@ const main = async () => {
         `${unit.inPlace?.writes} operazioni sull'handle "${inPlaceWrite.name}"`
       );
       check(
-        'Contenuto scritto: JSON indentato con firma, mezzo, targa e 3 colli del piano',
-        inPlaceJson?.version === 1 &&
+        'Contenuto scritto: JSON indentato con firma v2, flotta, targa e 3 colli del piano',
+        inPlaceJson?.version === 2 &&
           inPlaceJson?.app === 'truck-planner' &&
-          inPlaceJson?.vehicle?.id === 'bilico_cc' &&
-          inPlaceJson?.plate === 'XZ999ZZ' &&
-          inPlaceJson?.items?.length === 3 &&
-          (inPlaceWrite.data ?? '').includes('\n  "version": 1'),
-        `${inPlaceJson?.items?.length} colli, ${(inPlaceWrite.data ?? '').length} byte`
+          inPlaceJson?.bays?.length === 1 &&
+          inPlaceJson?.bays?.[0]?.vehicle?.id === 'bilico_cc' &&
+          inPlaceJson?.bays?.[0]?.plate === 'XZ999ZZ' &&
+          inPlaceJson?.bays?.[0]?.items?.length === 3 &&
+          inPlaceJson?.activeBayId === 'bay-1' &&
+          (inPlaceWrite.data ?? '').includes('\n  "version": 2'),
+        `${inPlaceJson?.bays?.[0]?.items?.length} colli, ${(inPlaceWrite.data ?? '').length} byte`
       );
       check(
         'File nuovo con selettore nativo: `isNewFile: true`, nome del file e handle adottato',
@@ -806,10 +822,10 @@ const main = async () => {
       '`Ctrl + S` riscrive lo STESSO file (write + close sull\'handle attivo) con lo stato vivo',
       afterCtrlS.writes === 2 &&
         savedJson !== null &&
-        savedJson.items.length === 4 &&
-        savedJson.plate === 'XZ999ZZ' &&
-        savedJson.vehicle.id === 'bilico_cc',
-      `${afterCtrlS.writes} operazioni, ${savedJson?.items?.length} colli nel file`
+        savedJson.bays?.[0]?.items.length === 4 &&
+        savedJson.bays?.[0]?.plate === 'XZ999ZZ' &&
+        savedJson.bays?.[0]?.vehicle.id === 'bilico_cc',
+      `${afterCtrlS.writes} operazioni, ${savedJson?.bays?.[0]?.items?.length} colli nel file`
     );
     check(
       'Sovrascrittura in-place: NESSUN download prodotto nella cartella Download',
@@ -853,7 +869,7 @@ const main = async () => {
         seen: window.__ctrlS?.seen ?? null,
         defaultPrevented: window.__ctrlS?.last ? window.__ctrlS.last.defaultPrevented : null,
         plate: document.getElementById('vehicle-plate-input').value,
-        savedPlate: write ? JSON.parse(write.data).plate : null,
+        savedPlate: write ? JSON.parse(write.data).bays[0].plate : null,
       };
     `);
     check(
@@ -984,15 +1000,15 @@ const main = async () => {
         }
       })(),
     }));
-    const unitFile = savedFiles.find((f) => f.json?.plate === UNIT_FALLBACK_PLATE);
-    const emptyFile = savedFiles.find((f) => f.json?.items?.length === 0);
+    const unitFile = savedFiles.find((f) => f.json?.bays?.[0]?.plate === UNIT_FALLBACK_PLATE);
+    const emptyFile = savedFiles.find((f) => f.json?.bays?.[0]?.items?.length === 0);
     if (unit) {
       check(
         'Fallback del test unitario: file `piano-UNIT9-<data>.json` con i 3 colli del piano',
         unitFile !== undefined &&
           unitFile.name === UNIT_FALLBACK_FILE_NAME &&
-          unitFile.json.items.length === 3,
-        `${unitFile?.name} · ${unitFile?.json?.items?.length} colli`
+          unitFile.json.bays[0].items.length === 3,
+        `${unitFile?.name} · ${unitFile?.json?.bays?.[0]?.items?.length} colli`
       );
     } else {
       skip(
@@ -1004,8 +1020,8 @@ const main = async () => {
       'Fallback end-to-end: `piano-carico-<data>.json` con il pianale svuotato (0 colli)',
       emptyFile !== undefined &&
         emptyFile.name === FALLBACK_FILE_NAME &&
-        emptyFile.json.items.length === 0,
-      `${emptyFile?.name} · ${emptyFile?.json?.items?.length} colli`
+        emptyFile.json.bays[0].items.length === 0,
+      `${emptyFile?.name} · ${emptyFile?.json?.bays?.[0]?.items?.length} colli`
     );
 
     /* --- 10) Console pulita ---------------------------------------------- */

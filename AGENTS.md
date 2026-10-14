@@ -27,8 +27,8 @@ Sostituisce definitivamente i vecchi layout Excel a celle unite, operando su un 
   - `X = Larghezza Veicolo` (a destra): Parete destra
 
 ### Preset Veicoli Principali
-1. `bilico_cc`: Bilico CC / Olandese — Larghezza **250 cm** × Lunghezza **1328 cm** (13,28 m).
-2. `bilico_std`: Bilico Frigo Standard — Larghezza **245 cm** × Lunghezza **1328 cm** (13,28 m).
+1. `bilico_cc`: Bilico CC Fiori — Larghezza **250 cm** × Lunghezza **1328 cm** (13,28 m). *(preset di default di ogni nuovo stallo)*
+2. `bilico_std`: Bilico Frigo — Larghezza **245 cm** × Lunghezza **1328 cm** (13,28 m).
 3. `motrice_3a`: Motrice 3 Assi — Larghezza **250 cm** × Lunghezza **760 cm** (7,60 m).
 4. `custom`: Dimensioni libere fornite dall'utente.
 
@@ -45,9 +45,40 @@ Tutti i colli operano in centimetri reali $(W \times L)$ e sono ruotabili di $90
 ---
 
 ## 4. ARCHITETTURA MODULARE & PREDISPOSIZIONI FUTURE
-- **Modalità Attiva:** `PIANALE` (Focus attuale al 100%).
+- **Modalità Attiva:** `PIANALE` (Focus attuale al 100%), in versione **centrale multi-pianale** (fino a 3 mezzi, vedi §4-bis).
 - **Predisposizione Futura:** `GANCIERA` (Carne fresca appesa su 5 o 6 binari al tetto con logica LIFO e bilanciamento baricentro).
   - *Regola per l'Agent:* Non implementare la ganciera adesso, ma mantenere i componenti del pianale isolati (es. dentro cartelle o componenti modulari) per consentire l'inserimento futuro di un selettore di modalità senza dover rifattorizzare il core.
+
+---
+
+## 4-bis. CENTRALE MULTI-PIANALE (FINO A 3 MEZZI)
+
+### Modello dati
+- **`DeckBay` (`src/types.ts`)** — lo **stallo**: `{ id, vehicle, plate, items, notes }`. È l'unità di lavoro della centrale: ogni mezzo ha mezzo, targa, colli e note **propri**, su **coordinate locali** (`0…width`, `0…length`). La posizione dello stallo nella scena **non è mai un dato salvato**.
+- **`HistorySnapshot`** = `{ bays, activeBayId, labelDensity }`: Undo/Redo copre l'intera flotta (aggiunta ed eliminazione di un mezzo sono passi pieni).
+- **`ProjectFile` — schema `version: 2`**: `{ version: 2, app, timestamp, bays, activeBayId, labelDensity }`. I file **v1** (pianale singolo) restano apribili: `utils/fileStorage.ts` li riconosce e li **migra al volo** in un unico stallo `bay-1`.
+
+### Dove vive cosa
+| Responsabilità | File |
+| --- | --- |
+| Stato flotta, `activeBayId`, getter del mezzo attivo, `updateActiveBay` / `updateActiveItems` / `updateActiveNotes`, `handleAddBay` / `handleDeleteBay` | `src/App.tsx` |
+| Geometria degli stalli: `BAY_SPACING_CM` (180 cm), `bayOffsets`, `nextBayOffset`, geometria dell'header, `MAX_BAYS` | `src/utils/bays.ts` |
+| Fabbrica dello stallo di default (`createDefaultBay`) e `MAX_BAYS` | `src/constants.ts` |
+| Canvas affiancato + header di stallo (pillola pulita, senza "X") | `src/components/TruckCanvas.tsx` |
+| Pillole del Mezzo Attivo + Totale Flotta + comando `Elimina` + orientamento di stampa | `src/components/ControlDeck.tsx` |
+| Una pagina A4 per mezzo + foglio unico di flotta (verticale con 1–2 mezzi, panoramico con 3) | `src/components/PrintReport.tsx`, `src/utils/export.ts` (`getFleetExtent`, `buildFleetSvg`) |
+
+### Regole non negoziabili
+1. **Coordinate locali:** colli e note di uno stallo vivono sempre in `0…width` / `0…length`. La traslazione che li affianca è **solo presentazione** (`bayOffsets`) e non deve mai entrare nei dati salvati.
+2. **Una sola porta d'ingresso:** ogni mutazione della stiva passa da `updateActiveBay` / `updateActiveItems` / `updateActiveNotes` — mai `setBays` sparso nei gestori.
+3. **Getter del mezzo attivo:** `resolveActiveBay(bays, activeBayId)` con fallback al primo stallo, così l'app non resta mai senza bersaglio dopo un Undo o l'apertura di un file.
+4. **Limiti:** massimo `MAX_BAYS = 3` mezzi; l'ultimo stallo rimasto non è mai eliminabile e l'eliminazione di uno stallo con carico chiede conferma (`window.confirm`).
+5. **Separazione degli spazi:** lo stacco `BAY_SPACING_CM = 180` cm accoglie righello metrico e badge LDM senza collisioni; l'header di stallo resta entro `BAY_HEADER_WIDTH_CM` per non invadere il pianale successivo.
+6. **Stampa a due modalità:** `clean` = un unico foglio con tutti i pianali affiancati — **A4 verticale** con 1 o 2 mezzi, **A4 panoramico** con 3 (`bays.length >= 3`); `full` = **A4 verticale**, una pagina per mezzo più la pagina di servizio `TOTALE FLOTTA`. L'orientamento è deciso da `ControlDeck.triggerPrint`, che inietta la regola `@page` in `<head>` durante la stampa e — solo in orizzontale — marca `<html>` con `data-print-landscape="true"` (il CSS adatta `.print-clean-sheet`): in CSS `@page` non ammette selettori di modalità. Entrambi gli attributi e il foglio temporaneo sono rimossi all'`afterprint`.
+7. **Nessun comando distruttivo sul canvas:** l'header di stallo è una pillola cliccabile (`MEZZO n` + badge `ATTIVO`) e **non** porta alcuna icona "X" / cestino; l'eliminazione di un mezzo passa solo dal pulsante `Elimina` della sidebar (`#btn-delete-bay`).
+
+### Verifica automatica
+`node scripts/verify-multi-bay.mjs http://localhost:5199/truck-planner/` (con il dev server attivo) copre affiancamento, limite di flotta, pillole, totale flotta, salvataggio v2, migrazione v1, eliminazione con conferma, l'assenza di ogni icona "X" sul canvas, la geometria dell'header di stallo e le due stampe con l'orientamento misurato sotto emulazione di stampa (verticale con 1–2 mezzi, panoramico con 3).
 
 ---
 

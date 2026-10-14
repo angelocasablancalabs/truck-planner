@@ -5,11 +5,19 @@ import type {
   PalletDefinition,
   AddItemOptions,
   LabelDensity,
-  SideNote,
   ProjectFile,
+  DeckBay,
 } from '../types';
-import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '../constants';
+import {
+  VEHICLE_PRESETS,
+  PALLET_CATALOG,
+  CUSTOM_PALLET,
+  COLOR_FAMILIES,
+  MAX_BAYS,
+} from '../constants';
 import type { ColorFamily } from '../constants';
+import { calculateLdmMetrics } from '../utils/snapping';
+import { canDeleteBay } from '../utils/bays';
 import { copyCanvasToClipboard } from '../utils/export';
 import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
 import {
@@ -118,6 +126,13 @@ const COLOR_SHADE_ROWS: { key: keyof ColorFamily['shades']; label: string }[] = 
 ];
 
 /**
+ * ID del foglio temporaneo `@page` iniettato in `<head>` durante la stampa:
+ * fissa l'orientamento della carta alla modalità scelta (panoramico per la sola
+ * grafica, verticale per la scheda tecnica) e viene sempre rimosso a fine stampa.
+ */
+const PRINT_PAGE_STYLE_ID = 'print-page-orientation';
+
+/**
  * Versante di carico richiesto dall'operatore:
  * - `piatto`: lato lungo verso Cabina/Porte (W = max, L = min);
  * - `punta`:  lato corto verso Cabina/Porte (W = min, L = max).
@@ -135,6 +150,21 @@ interface PalletBatchDraft {
 }
 
 interface ControlDeckProps {
+  /**
+   * **Flotta** della centrale multi-pianale (da 1 a `MAX_BAYS` mezzi affiancati
+   * nello stesso canvas e nello stesso file JSON). La sidebar mostra il
+   * selettore a pillole per passare da un mezzo all'altro e il totale di flotta;
+   * tutti i comandi qui sotto agiscono sul **Mezzo Attivo**.
+   */
+  bays: DeckBay[];
+  /** ID del Mezzo Attivo (lo stallo comandato da questa plancia). */
+  activeBayId: string;
+  /** Cambio del Mezzo Attivo (click su una pillola). */
+  onSelectBay: (bayId: string) => void;
+  /** Aggiunge un mezzo alla centrale (disabilitato al raggiungimento di `MAX_BAYS`). */
+  onAddBay: () => void;
+  /** Elimina un mezzo dalla centrale (disabilitato sull'ultimo rimasto). */
+  onDeleteBay: (bayId: string) => void;
   vehicle: VehicleConfig;
   onSelectVehicle: (v: VehicleConfig) => void;
   /**
@@ -203,10 +233,10 @@ interface ControlDeckProps {
     name?: string,
     color?: string
   ) => void;
-  /** Note laterali presenti sul pianale: servono allo snapshot PNG (e alla
-   *  scheda A4), non più a un pannello di modifica — l'editing vive nel
-   *  floating `NoteInspector` sopra il canvas. */
-  notes: SideNote[];
+  /**
+   * Colli del **Mezzo Attivo**: alimentano il riepilogo di stiva e i comandi
+   * rapidi della plancia (lo snapshot PNG legge l'intera flotta da `bays`).
+   */
   items: PlacedItem[];
   /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
   labelDensity: LabelDensity;
@@ -217,6 +247,11 @@ interface ControlDeckProps {
 }
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
+  bays,
+  activeBayId,
+  onSelectBay,
+  onAddBay,
+  onDeleteBay,
   vehicle,
   onSelectVehicle,
   plate,
@@ -236,7 +271,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   onUndo,
   onRedo,
   onAddBatch,
-  notes,
   items,
   labelDensity,
   selectedItemIds,
@@ -376,7 +410,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     if (isCopying) return;
     setIsCopying(true);
 
-    const copied = await copyCanvasToClipboard(vehicle, items, labelDensity, notes, plate);
+    const copied = await copyCanvasToClipboard(bays, labelDensity);
 
     setIsCopying(false);
     setCopyFeedback(copied ? 'copied' : 'downloaded');
@@ -497,11 +531,25 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     );
   };
 
-  // Calcolo statistiche veloci
+  // Calcolo statistiche veloci del **Mezzo Attivo**
   const countsByCode = items.reduce((acc, curr) => {
     acc[curr.name] = (acc[curr.name] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  /* --- Totale Flotta (centrale multi-pianale) ------------------------------ */
+  /**
+   * Riepilogo complessivo della centrale: colli e metri lineari di **tutti** i
+   * mezzi, calcolati con la stessa funzione pura che alimenta canvas, snapshot
+   * PNG e scheda di stampa (`calculateLdmMetrics`, Regola della Corsia di
+   * Parete). Il totale vive in fondo al "Riepilogo Stiva" e compare solo quando
+   * in centrale c'è più di un mezzo.
+   */
+  const totalFleetItems = bays.reduce((sum, bay) => sum + bay.items.length, 0);
+  const totalFleetLdm = bays.reduce(
+    (sum, bay) => sum + calculateLdmMetrics(bay.vehicle, bay.items).maxOccupiedY,
+    0
+  );
 
   /**
    * Etichetta accessibile (`sr-only`), icona e stile del pulsante "Copia
@@ -553,29 +601,58 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
    *
    * L'attributo `data-print-mode` posto su `<html>` seleziona il sottoinsieme di
    * regole `@media print` di `src/index.css` e quindi il contenuto del foglio:
-   *   - `'clean'` → **solo la grafica** del pianale (camion vettoriale, targa e
-   *     note centrati a piena pagina): il dialogo di stampa del browser può
-   *     essere salvato come PDF **vettoriale puro da 20–40 KB**, nitido al 100%
-   *     a qualunque zoom, oppure inviato a una stampante fisica;
-   *   - `'full'`  → la **scheda tecnica A4 completa** (`PrintReport`), con
-   *     intestazione formale, targa e riepilogo colli su una o due pagine.
+   *   - `'clean'` → **solo la grafica** della centrale (tutti i pianali affiancati
+   *     su un unico foglio A4): il dialogo di stampa del browser può essere
+   *     salvato come PDF **vettoriale puro da 20–40 KB**, nitido al 100% a
+   *     qualunque zoom, oppure inviato a una stampante fisica;
+   *   - `'full'`  → la **scheda tecnica A4 completa** (`PrintReport`), con una
+   *     pagina per ciascun mezzo: intestazione formale, targa e riepilogo colli.
    *
-   * Il documento è identico a prima della stampa: l'attributo viene rimosso
-   * all'evento `afterprint`, che il browser emette alla chiusura del dialogo
-   * (annullamento compreso), così lo schermo non resta mai in stato "di stampa".
+   * L'**orientamento del foglio** segue il contenuto reale: **verticale** per la
+   * scheda tecnica e per la sola grafica di **1 o 2 mezzi** (basta l'altezza del
+   * foglio), **panoramico** solo con **3 mezzi** in centrale, dove i pianali
+   * affiancati hanno bisogno della larghezza. Non potendo esprimere questa
+   * differenza con un selettore CSS (nelle regole `@page` è ammessa la sola
+   * pseudo-classe `:root`), la regola viene iniettata in `<head>` per la durata
+   * della stampa e rimossa all'evento `afterprint` insieme agli attributi
+   * `data-print-mode` e `data-print-landscape`.
+   *
+   * Il documento è identico a prima della stampa: l'attributo e il foglio
+   * temporaneo vengono rimossi alla chiusura del dialogo (annullamento compreso),
+   * così lo schermo non resta mai in stato "di stampa".
    */
   const triggerPrint = (mode: 'clean' | 'full') => {
     const originalTitle = document.title;
     if (mode === 'clean') {
       document.title = ' ';
     }
+
+    /**
+     * Foglio temporaneo della stampa: **A4 verticale** per la scheda tecnica
+     * (una pagina per mezzo) e per la sola grafica di **1 o 2 mezzi**; **A4
+     * panoramico** quando la centrale schiera **3 mezzi**, l'unico caso in cui il
+     * disegno affiancato ha bisogno della larghezza del foglio. L'ID è unico e il
+     * tag viene sempre rimosso a fine stampa.
+     */
+    const isLandscape = mode === 'clean' && bays.length >= 3;
+    const pageStyle = document.createElement('style');
+    pageStyle.id = PRINT_PAGE_STYLE_ID;
+    pageStyle.textContent = `@page { size: A4 ${isLandscape ? 'landscape' : 'portrait'}; margin: 0; }`;
+    document.getElementById(PRINT_PAGE_STYLE_ID)?.remove();
+    document.head.appendChild(pageStyle);
+
     document.documentElement.setAttribute('data-print-mode', mode);
+    if (isLandscape) {
+      document.documentElement.setAttribute('data-print-landscape', 'true');
+    }
     window.print();
     window.addEventListener(
       'afterprint',
       () => {
         document.title = originalTitle;
         document.documentElement.removeAttribute('data-print-mode');
+        document.documentElement.removeAttribute('data-print-landscape');
+        document.getElementById(PRINT_PAGE_STYLE_ID)?.remove();
       },
       { once: true }
     );
@@ -748,6 +825,83 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             <span className="truncate font-semibold text-slate-800">{activeFileName}</span>
           </div>
         )}
+      </div>
+
+      {/* --- Selettore Mezzo a Pillole (centrale multi-pianale) --------------- *
+       *  Una fila di pillole compatte per passare da un camion all'altro con un
+       *  solo click: `[ 🚛 Mezzo 1 (TARGA) ]`. La pillola attiva porta lo stile
+       *  blu primario, le altre restano su fondo bianco/ardesia. L'ultima pillola
+       *  è il comando `+` che aggiunge un mezzo (fino a `MAX_BAYS`), mentre il
+       *  cestino elimina quello attivo (mai l'ultimo rimasto).
+       *  Tutta la plancia qui sotto — configurazione mezzo, targa, catalogo colli
+       *  e riepilogo stiva — comanda **il mezzo attivo**. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+            Centrale ({bays.length}/{MAX_BAYS} Mezzi)
+          </label>
+          <button
+            type="button"
+            id="btn-delete-bay"
+            onClick={() => onDeleteBay(activeBayId)}
+            disabled={!canDeleteBay(bays)}
+            title={
+              canDeleteBay(bays)
+                ? 'Elimina il mezzo attivo dalla centrale'
+                : 'La centrale deve conservare almeno un mezzo'
+            }
+            className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition ${
+              canDeleteBay(bays)
+                ? 'text-red-800 hover:text-red-900 hover:bg-red-50 border border-transparent hover:border-red-200 cursor-pointer'
+                : 'text-slate-300 cursor-not-allowed border border-transparent'
+            }`}
+          >
+            <Trash2 className="w-3 h-3" />
+            Elimina
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-1">
+          {bays.map((bay, index) => {
+            const isActive = bay.id === activeBayId;
+            const compactPlate = bay.plate.trim().slice(0, 8);
+            return (
+              <button
+                key={bay.id}
+                type="button"
+                id={`bay-pill-${bay.id}`}
+                onClick={() => onSelectBay(bay.id)}
+                title={`${bay.vehicle.name}${bay.plate.trim() ? ` — ${bay.plate.trim()}` : ''}`}
+                aria-pressed={isActive}
+                className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] leading-none transition cursor-pointer ${
+                  isActive
+                    ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold'
+                    : 'bg-white border-slate-300 text-slate-600 font-medium hover:border-slate-400 hover:text-slate-800'
+                }`}
+              >
+                <Truck className="w-3 h-3 shrink-0" />
+                <span className="truncate">
+                  Mezzo {index + 1}
+                  {compactPlate ? ` (${compactPlate})` : ''}
+                </span>
+              </button>
+            );
+          })}
+
+          {/* Aggiungi mezzo: presente finché la centrale non è al completo. */}
+          {bays.length < MAX_BAYS && (
+            <button
+              type="button"
+              id="btn-add-bay"
+              onClick={onAddBay}
+              title={`Aggiungi un mezzo alla centrale (max ${MAX_BAYS})`}
+              className="flex items-center gap-1 rounded-full border border-dashed border-slate-400 px-2 py-1 text-[11px] leading-none font-semibold text-slate-600 transition cursor-pointer hover:border-blue-500 hover:text-blue-700 hover:bg-blue-50"
+            >
+              <Plus className="w-3 h-3 shrink-0" />
+              <span>Mezzo</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Configurazione Mezzo / Targa: blocco unico e compatto (space-y-1 fra
@@ -1233,7 +1387,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         </div>
       </div>
 
-      {/* Statistiche del Carico */}
+      {/* Statistiche del Carico del **Mezzo Attivo**, con il totale di flotta */}
       <div className="space-y-2 border-t border-slate-200 pt-4">
         <div className="flex justify-between items-center">
           <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
@@ -1253,6 +1407,16 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                 <span className="font-bold">{count}</span>
               </div>
             ))
+          )}
+
+          {/* Totale Flotta: compare solo con più di un mezzo in centrale */}
+          {bays.length > 1 && (
+            <div className="pt-2 mt-2 border-t border-slate-200 flex justify-between items-center text-[11px] font-bold text-slate-600 uppercase tracking-tight">
+              <span>Totale Flotta ({bays.length} Mezzi):</span>
+              <span className="font-mono text-slate-800">
+                {totalFleetItems} Colli · {(totalFleetLdm / 100).toFixed(2)} m
+              </span>
+            </div>
           )}
         </div>
       </div>

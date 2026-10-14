@@ -588,11 +588,14 @@ const main = async () => {
           background: style.backgroundColor,
           borderColor: style.borderTopColor,
           marginTop: parseFloat(style.marginTop),
-          // Stacco reale dalla seconda riga della toolbar: il badge vive dentro
-          // il wrapper space-y-1.5, quindi la spaziatura arriva dal genitore.
+          // Stacco reale dalla toolbar: il badge vive dentro il wrapper
+          // (space-y-1.5) che impila le due righe di pulsanti, quindi il
+          // riferimento è l'ULTIMA riga della toolbar (quella dei comandi di
+          // stampa), non la prima.
           gapFromToolbar: Math.round(
             el.getBoundingClientRect().top -
-              document.getElementById('btn-save-project').parentElement.getBoundingClientRect().bottom
+              el.parentElement.lastElementChild.previousElementSibling.getBoundingClientRect()
+                .bottom
           ),
           iconColor: getComputedStyle(el.querySelector('span')).color,
           truncated: style.overflow === 'hidden' && style.textOverflow === 'ellipsis',

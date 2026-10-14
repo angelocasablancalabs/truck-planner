@@ -340,7 +340,9 @@ const main = async () => {
       const text = badge && badge.querySelector('text');
       if (!text) return null;
       const box = text.getBBox();
-      const world = text.closest('g[transform]');
+      // Lo zoom della vista vive nel gruppo del mondo: i gruppi di stallo hanno
+      // una propria traslazione, quindi si usa l'aggancio dedicato.
+      const world = document.querySelector('[data-canvas-world]');
       const zoom = Number((world.getAttribute('transform').split('scale(')[1] || '').replace(')', ''));
       const rows = Array.from(document.querySelectorAll('rect'))
         .filter(r => r.getAttribute('width') === '250' && r.getAttribute('height') === '1328');

@@ -7,17 +7,20 @@
  *
  *    1. **Salva Piano** → il browser scarica davvero un file `.json` con il
  *       nome pulito ufficiale (`piano-<TARGA>_<YYYY-MM-DD>.json`, targa ripulita
- *       da ogni carattere non alfanumerico) e contenuto valido: `version: 1`,
- *       `app: 'truck-planner'`, `timestamp` ISO, il **mezzo** (bilico CC
+ *       da ogni carattere non alfanumerico) e contenuto valido nella **centrale
+ *       multi-pianale (schema v2)**: `version: 2`, `app: 'truck-planner'`,
+ *       `timestamp` ISO, la **flotta `bays`** con il mezzo (bilico CC
  *       250 × 1328), la **targa** digitata, i **3 colli** con quote/posizioni/
- *       colori, le **note laterali** e la **densità etichette**;
+ *       colori, le **note laterali**, `activeBayId` e la **densità etichette**;
  *    2. **feedback "Salvato!"** verde per 2 secondi sul pulsante;
  *    3. **Apri Piano** → un file di progetto valido (6 colli, targa diversa,
  *       densità `minimal`, 1 nota) ripristina **tutto lo stato in scena**:
  *       targa, numero e codici dei colli sul canvas, nota laterale, densità;
  *    4. **Undo** (`Ctrl + Z`) annulla l'apertura e riporta lo stato precedente;
  *    5. **file corrotto** → `alert` amichevole e **nessuna** alterazione del
- *       pianale (i colli restano quelli di prima).
+ *       pianale (i colli restano quelli di prima);
+ *    6. **piano storico v1** (a pianale singolo) → auto-migrazione istantanea al
+ *       primo stallo e messa in scena senza perdere nemmeno un collo.
  *
  *  Uso:  node scripts/verify-project-file.mjs [url]
  *  Chiude sempre con `browser.close()` + `process.exit(0)` entro 15 secondi.
@@ -82,15 +85,59 @@ const SEED_ITEMS = [
 
 /** Piano di ripristino: 6 colli, targa diversa, densità `minimal` e una nota. */
 const FIXTURE_PROJECT = {
-  version: 1,
+  version: 2,
   app: 'truck-planner',
   timestamp: '2026-03-04T08:15:00.000Z',
+  bays: [
+    {
+      id: 'bay-1',
+      vehicle: VEHICLE,
+      plate: 'XZ999ZZ',
+      items: Array.from({ length: 6 }, (_, i) => ({
+        id: `INDU_fixture_${i}`,
+        code: 'INDU',
+        name: i < 3 ? 'PRODIVA' : 'CONAD',
+        width: 120,
+        length: 100,
+        x: (i % 2) * 120,
+        y: Math.floor(i / 2) * 100,
+        rotation: 90,
+        color: '#E2E8F0',
+        borderColor: ITEM_BORDER_COLOR,
+      })),
+      notes: [
+        {
+          id: 'note_fixture_1',
+          x: 280,
+          y: 40,
+          content: 'Bancali poco stabili: attenzione durante il carico.',
+          color: '#E2E8F0',
+          borderColor: '#94A3B8',
+          width: 140,
+          fontSize: 14,
+        },
+      ],
+    },
+  ],
+  activeBayId: 'bay-1',
+  labelDensity: 'minimal',
+};
+
+/**
+ * Piano **storico a pianale singolo** (schema v1): campi piatti in radice e
+ * nessun `bays`. Deve essere riconosciuto e migrato al volo in un unico stallo,
+ * senza perdere colli né targhe.
+ */
+const LEGACY_V1_PROJECT = {
+  version: 1,
+  app: 'truck-planner',
+  timestamp: '2026-01-08T06:45:00.000Z',
   vehicle: VEHICLE,
-  plate: 'XZ999ZZ',
-  items: Array.from({ length: 6 }, (_, i) => ({
-    id: `INDU_fixture_${i}`,
+  plate: 'STORICO1',
+  items: Array.from({ length: 3 }, (_, i) => ({
+    id: `LEGACY_${i}`,
     code: 'INDU',
-    name: i < 3 ? 'PRODIVA' : 'CONAD',
+    name: 'CLIENTE STORICO',
     width: 120,
     length: 100,
     x: (i % 2) * 120,
@@ -99,19 +146,8 @@ const FIXTURE_PROJECT = {
     color: '#E2E8F0',
     borderColor: ITEM_BORDER_COLOR,
   })),
-  notes: [
-    {
-      id: 'note_fixture_1',
-      x: 280,
-      y: 40,
-      content: 'Bancali poco stabili: attenzione durante il carico.',
-      color: '#E2E8F0',
-      borderColor: '#94A3B8',
-      width: 140,
-      fontSize: 14,
-    },
-  ],
-  labelDensity: 'minimal',
+  notes: [],
+  labelDensity: 'all',
 };
 
 /** File non valido: JSON corretto ma **senza** i campi minimi indispensabili. */
@@ -619,51 +655,62 @@ const main = async () => {
       `${jsonFiles[0]} (atteso ${EXPECTED_FILE_NAME})`
     );
     check(
-      'Firma del formato: `version: 1`, `app: "truck-planner"`, `timestamp` ISO',
-      saved?.version === 1 &&
+      'Firma del formato (schema v2): `version: 2`, `app: "truck-planner"`, `timestamp` ISO',
+      saved?.version === 2 &&
         saved?.app === 'truck-planner' &&
         typeof saved?.timestamp === 'string' &&
         !Number.isNaN(Date.parse(saved.timestamp)),
       `version=${saved?.version}, app=${saved?.app}, timestamp=${saved?.timestamp}`
     );
     check(
-      'Veicolo salvato: bilico CC 250 × 1328 cm',
-      saved?.vehicle?.id === VEHICLE.id &&
-        saved?.vehicle?.width === 250 &&
-        saved?.vehicle?.length === 1328,
-      `${saved?.vehicle?.id} ${saved?.vehicle?.width}×${saved?.vehicle?.length} cm`
+      'Flotta salvata: un unico stallo `bay-1` con il bilico CC 250 × 1328 cm',
+      Array.isArray(saved?.bays) &&
+        saved.bays.length === 1 &&
+        saved.bays[0].id === 'bay-1' &&
+        saved.bays[0].vehicle?.id === VEHICLE.id &&
+        saved.bays[0].vehicle?.width === 250 &&
+        saved.bays[0].vehicle?.length === 1328,
+      `${saved?.bays?.length} stallo/i — ${saved?.bays?.[0]?.vehicle?.id} ${saved?.bays?.[0]?.vehicle?.width}×${saved?.bays?.[0]?.vehicle?.length} cm`
+    );
+    check(
+      'Nessun campo piatto dello schema v1 nel file salvato',
+      !('vehicle' in saved) && !('items' in saved) && !('notes' in saved) && !('plate' in saved),
+      Object.keys(saved).join(', ')
     );
     check(
       'Targa salvata esattamente come digitata',
-      saved?.plate === PLATE_SAVED,
-      `"${saved?.plate}"`
+      saved?.bays?.[0]?.plate === PLATE_SAVED,
+      `"${saved?.bays?.[0]?.plate}"`
     );
     check(
       'Colli salvati: 3, con codici, quote, posizioni, tinte e bordo antracite',
-      Array.isArray(saved?.items) &&
-        saved.items.length === 3 &&
-        saved.items.map((i) => i.code).join(',') === 'INDU,INDU,EUR' &&
-        saved.items[0].width === 120 &&
-        saved.items[0].length === 100 &&
-        saved.items[0].x === 0 &&
-        saved.items[0].y === 0 &&
-        saved.items[1].x === 120 &&
-        saved.items[2].y === 100 &&
-        saved.items[2].name === 'COOP' &&
-        saved.items[2].color.toLowerCase() === BATCH_COLOR.toLowerCase() &&
-        saved.items.every((i) => i.borderColor === ITEM_BORDER_COLOR),
-      saved?.items
+      Array.isArray(saved?.bays?.[0]?.items) &&
+        saved.bays[0].items.length === 3 &&
+        saved.bays[0].items.map((i) => i.code).join(',') === 'INDU,INDU,EUR' &&
+        saved.bays[0].items[0].width === 120 &&
+        saved.bays[0].items[0].length === 100 &&
+        saved.bays[0].items[0].x === 0 &&
+        saved.bays[0].items[0].y === 0 &&
+        saved.bays[0].items[1].x === 120 &&
+        saved.bays[0].items[2].y === 100 &&
+        saved.bays[0].items[2].name === 'COOP' &&
+        saved.bays[0].items[2].color.toLowerCase() === BATCH_COLOR.toLowerCase() &&
+        saved.bays[0].items.every((i) => i.borderColor === ITEM_BORDER_COLOR),
+      saved?.bays?.[0]?.items
         ?.map((i) => `${i.code}(${i.width}×${i.length})@${i.x},${i.y}`)
         .join(' ')
     );
     check(
-      'Note laterali e densità etichette inclusi nel file',
-      Array.isArray(saved?.notes) && saved.notes.length === 0 && saved?.labelDensity === 'all',
-      `notes=${saved?.notes?.length}, labelDensity=${saved?.labelDensity}`
+      'Note laterali, stallo attivo e densità etichette inclusi nel file',
+      Array.isArray(saved?.bays?.[0]?.notes) &&
+        saved.bays[0].notes.length === 0 &&
+        saved?.activeBayId === 'bay-1' &&
+        saved?.labelDensity === 'all',
+      `notes=${saved?.bays?.[0]?.notes?.length}, activeBayId=${saved?.activeBayId}, labelDensity=${saved?.labelDensity}`
     );
     check(
       'JSON leggibile e indentato (`JSON.stringify(project, null, 2)`)',
-      raw.includes('\n  "version": 1') && raw.split('\n').length > 20,
+      raw.includes('\n  "version": 2') && raw.split('\n').length > 20,
       `${raw.split('\n').length} righe, ${raw.length} byte`
     );
 
@@ -790,7 +837,28 @@ const main = async () => {
       `${(brokenDialog || '').split('\n').pop()}`
     );
 
-    /* --- 8) Nessun errore in console ------------------------------------- */
+    /* --- 8) Piano storico v1 → auto-migrazione allo schema v2 ------------ */
+    await loadProjectFile(
+      cdp,
+      'piano-storico-v1.json',
+      JSON.stringify(LEGACY_V1_PROJECT, null, 2)
+    );
+    await waitFor(
+      async () => cdp.eval(`return document.querySelectorAll('[data-canvas-item]').length === 3 ? 1 : 0;`),
+      4000,
+      'migrazione del piano storico v1'
+    );
+    const migrated = await cdp.eval(SNAPSHOT);
+    check(
+      'Piano storico v1 (campi piatti) migrato al volo: colli e targa in scena',
+      migrated.itemCount === 3 &&
+        migrated.itemCodes.every((code) => code === 'INDU') &&
+        migrated.plateInput === 'STORICO1' &&
+        migrated.sidebarTotal === 3,
+      `${migrated.itemCount} colli, targa "${migrated.plateInput}"`
+    );
+
+    /* --- 9) Nessun errore in console ------------------------------------- */
     check(
       'Nessun errore runtime in console',
       cdp.consoleErrors.length === 0,

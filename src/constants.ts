@@ -1,12 +1,39 @@
-import type { VehicleConfig, PalletDefinition } from './types';
+import type { DeckBay, VehicleConfig, PalletDefinition } from './types';
 
 // Preset dei camion della vostra flotta
 export const VEHICLE_PRESETS: VehicleConfig[] = [
-  { id: 'bilico_cc', name: 'Bilico frigo Fiori (2,50 × 13,28 m)', width: 250, length: 1328 },
-  { id: 'bilico_std', name: 'Bilico frigo Standard (2,45 × 13,28 m)', width: 245, length: 1328 },
+  { id: 'bilico_cc', name: 'Bilico CC Fiori (2,50 × 13,28 m)', width: 250, length: 1328 },
+  { id: 'bilico_std', name: 'Bilico Frigo (2,45 × 13,28 m)', width: 245, length: 1328 },
   { id: 'motrice_3a', name: 'Motrice 3 Assi (2,50 × 7,60 m)', width: 250, length: 760 },
   { id: 'custom', name: 'Personalizzato...', width: 250, length: 1360 },
 ];
+
+/* -------------------------------------------------------------------------- *
+ *  CENTRALE MULTI-PIANALE — COSTANTI E FABBRICA DELLO STALLO
+ *
+ *  La centrale ospita fino a `MAX_BAYS` mezzi affiancati nello stesso canvas:
+ *  ogni stallo è indipendente (mezzo, targa, colli e note propri) e nasce dalla
+ *  stessa fabbrica `createDefaultBay`, così un nuovo mezzo parte sempre dalla
+ *  configurazione di riferimento (Bilico CC Fiori 13,28 m) con pianale vuoto.
+ * -------------------------------------------------------------------------- */
+
+/** Numero massimo di mezzi affiancabili nella stessa centrale. */
+export const MAX_BAYS = 3;
+
+/** ID dello stallo di fabbrica: primo mezzo di ogni nuovo piano. */
+export const DEFAULT_BAY_ID = 'bay-1';
+
+/** Preset di riferimento per ogni nuovo stallo (Bilico CC Fiori 13,28 m). */
+export const DEFAULT_BAY_VEHICLE: VehicleConfig = VEHICLE_PRESETS[0];
+
+/** Fabbrica di uno stallo vuoto: mezzo di default, targa vuota, nessun carico. */
+export const createDefaultBay = (id: string = DEFAULT_BAY_ID): DeckBay => ({
+  id,
+  vehicle: DEFAULT_BAY_VEHICLE,
+  plate: '',
+  items: [],
+  notes: [],
+});
 
 /**
  * Bordo unico dei colli di catalogo: grigio antracite scuro.
@@ -172,8 +199,8 @@ export const LDM_BADGE = {
   width: 64,
   /** Altezza del rettangolo (cm). */
   height: 22,
-  /** Distanza tra la parete sinistra del pianale e il bordo destro del badge. */
-  rightGap: 50,
+  /** Distanza tra la parete sinistra del pianale e il bordo destro del badge (accostato alla sponda). */
+  rightGap: 12,
 } as const;
 
 /** Coordinata X del bordo sinistro del badge LDM (a sinistra del pianale). */
@@ -187,16 +214,18 @@ export const LDM_BADGE_RESERVED_LEFT = LDM_BADGE.rightGap + LDM_BADGE.width + 4;
 
 /* --- Indicatore LDM del lato DESTRO (carico asimmetrico) ------------------- */
 
-/** Distanza (cm) tra la parete destra del pianale e il badge LDM del lato destro. */
-export const LDM_BADGE_RIGHT_GAP = 14;
-
-/** Coordinata X (cm) del bordo sinistro del badge LDM del lato destro. */
+/**
+ * Coordinata X (cm) del bordo sinistro del badge LDM del lato destro: stesso
+ * accostamento della sponda sinistra (`LDM_BADGE.rightGap`), così il contatore
+ * appartiene visivamente alla parete del camion a cui è affiancato.
+ */
 export const ldmBadgeRightLeftX = (vehicleWidth: number): number =>
-  vehicleWidth + LDM_BADGE_RIGHT_GAP;
+  vehicleWidth + LDM_BADGE.rightGap;
 
 /** Coordinata X (cm) del centro del testo del badge LDM del lato destro. */
 export const ldmBadgeRightCenterX = (vehicleWidth: number): number =>
-  vehicleWidth + LDM_BADGE_RIGHT_GAP + LDM_BADGE.width / 2;
+  vehicleWidth + LDM_BADGE.rightGap + LDM_BADGE.width / 2;
 
 /** Spazio minimo (cm) da riservare a destra per il badge LDM del lato destro. */
-export const LDM_BADGE_RESERVED_RIGHT = LDM_BADGE_RIGHT_GAP + LDM_BADGE.width + 4;
+export const LDM_BADGE_RESERVED_RIGHT = LDM_BADGE.rightGap + LDM_BADGE.width + 4;
+

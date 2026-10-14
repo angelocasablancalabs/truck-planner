@@ -265,8 +265,27 @@ const main = async () => {
       );
     }
 
-    /* --- 2) X del pulsante `↔ Piatto` di PLT EUR: vuoto vs selezionato ---- */
+    /* --- 2) X del pulsante `↔ Piatto` di PLT EUR: vuoto vs selezionato ---- *
+     *  L'aggiunta **non** auto-seleziona il collo (l'HUD resta pulito): il
+     *  cruscotto fluttuante `ItemInspector` compare solo quando l'operatore
+     *  seleziona il collo, quindi la prova lo clicca sul canvas. */
     await cdp.eval(`document.getElementById('quick-piatto-EUR').click(); return 1;`);
+    await waitFor(
+      async () => cdp.eval(`return document.querySelector('[data-canvas-item]') ? 1 : 0;`),
+      4000,
+      'primo collo inserito sul pianale'
+    );
+    await cdp.eval(`
+      const item = document.querySelector('[data-canvas-item]');
+      const rect = item.getBoundingClientRect();
+      const opts = {
+        bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0,
+        clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+      };
+      item.dispatchEvent(new PointerEvent('pointerdown', opts));
+      item.dispatchEvent(new PointerEvent('pointerup', opts));
+      return 1;
+    `);
     await waitFor(
       async () => cdp.eval(`return document.getElementById('btn-add-side-note') ? 1 : 0;`),
       4000,

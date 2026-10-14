@@ -1,0 +1,71 @@
+{
+  "version": 2,
+  "app": "truck-planner",
+  "timestamp": "2026-10-14T15:29:13.321Z",
+  "bays": [
+    {
+      "id": "bay-1",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico CC Fiori (2,50 × 13,28 m)",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "BB222BB",
+      "items": [],
+      "notes": []
+    },
+    {
+      "id": "bay-1791991750984",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico CC Fiori (2,50 × 13,28 m)",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "AA111AA",
+      "items": [
+        {
+          "id": "INDU_1791991751399_w9w3",
+          "code": "INDU",
+          "name": "PLT INDU",
+          "width": 100,
+          "length": 120,
+          "x": 0,
+          "y": 0,
+          "rotation": 0,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "bay-1791991751816",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico CC Fiori (2,50 × 13,28 m)",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "CC333CC",
+      "items": [
+        {
+          "id": "INDU_1791991752257_f1v3",
+          "code": "INDU",
+          "name": "PLT INDU",
+          "width": 100,
+          "length": 120,
+          "x": 0,
+          "y": 0,
+          "rotation": 0,
+          "color": "#E2E8F0",
+          "borderColor": "#334155"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "activeBayId": "bay-1",
+  "labelDensity": "all"
+}

@@ -382,10 +382,12 @@ const PRINT_LAYOUT_PROBE = `
     mode: document.documentElement.getAttribute('data-print-mode'),
     screenApp: snap('#screen-app'),
     report: snap('#print-report'),
-    page: snap('#print-report .print-page-first'),
+    page: snap('#print-report .print-bay-page'),
+    cleanSheet: snap('#print-report .print-clean-sheet'),
     header: snap('#print-report header'),
     table: snap('#print-report .print-table'),
     drawing: snap('#print-report .print-drawing'),
+    cleanDrawing: snap('#print-report .print-clean-sheet .print-drawing'),
   };
 `;
 
@@ -580,11 +582,12 @@ const main = async () => {
         return true;
       `);
 
-    /** Stato del ciclo di vita: modalità richiesta e chiamate a `window.print`. */
+    /** Stato del ciclo di vita: modalità richiesta, orientamento e chiamate a `window.print`. */
     const printState = () =>
       cdp.eval(`
         return {
           mode: document.documentElement.getAttribute('data-print-mode'),
+          landscape: document.documentElement.getAttribute('data-print-landscape'),
           calls: window.__printCalls,
         };
       `);
@@ -714,13 +717,13 @@ const main = async () => {
       printScoped.map((r) => r.selectors).join(' | ') || 'nessuna regola trovata'
     );
     check(
-      'Modalità `clean`: la prima pagina centra il disegno a piena altezza (277 mm, gap 0) e il disegno occupa il 100%',
+      'Modalità `clean`: il foglio A4 **verticale** (210 × 297 mm) è il default del foglio unico',
       printScoped.some(
         (r) =>
-          ruleHas(r, '.print-page-first') &&
-          ruleHas(r, 'height: 277mm') &&
-          ruleHas(r, 'justify-content: center') &&
-          ruleHas(r, 'gap: 0')
+          ruleHas(r, '.print-clean-sheet') &&
+          ruleHas(r, 'width: 210mm') &&
+          ruleHas(r, 'height: 297mm') &&
+          ruleHas(r, 'justify-content: flex-start')
       ) &&
         printScoped.some(
           (r) =>
@@ -729,6 +732,17 @@ const main = async () => {
             ruleHas(r, 'height: 100%')
         ),
       printScoped.map((r) => r.cssText).join(' | ') || 'nessuna regola trovata'
+    );
+    check(
+      'Modalità `clean`: con 3 mezzi il foglio diventa **panoramico** (297 × 210 mm) via `data-print-landscape`',
+      printScoped.some(
+        (r) =>
+          ruleHas(r, 'data-print-landscape') &&
+          ruleHas(r, '.print-clean-sheet') &&
+          ruleHas(r, 'width: 297mm') &&
+          ruleHas(r, 'height: 210mm')
+      ),
+      printScoped.map((r) => r.selectors).join(' | ') || 'nessuna regola trovata'
     );
 
     /* --- 5) Resa reale del foglio sotto media di stampa ------------------- *
@@ -757,16 +771,20 @@ const main = async () => {
       }, header=${cleanSheet.header?.display}, tabella=${cleanSheet.table?.display ?? 'assente'}`
     );
     check(
-      "Modalità `clean` su carta: il disegno riempie l'intera pagina A4 (centrato, gap 0)",
-      cleanSheet.page !== null &&
-        cleanSheet.drawing !== null &&
-        cleanSheet.page.justifyContent === 'center' &&
-        cleanSheet.page.alignItems === 'center' &&
-        cleanSheet.page.gap === '0px' &&
-        cleanSheet.drawing.height >= cleanSheet.page.height - 2 &&
-        Math.abs(cleanSheet.drawing.width - cleanSheet.page.width) <= 2,
-      `pagina ${cleanSheet.page?.width}×${cleanSheet.page?.height} px (gap ${cleanSheet.page?.gap}, ` +
-        `justify ${cleanSheet.page?.justifyContent}), disegno ${cleanSheet.drawing?.width}×${cleanSheet.drawing?.height} px`
+      "Modalità `clean` su carta: con 1 mezzo il disegno riempie il foglio A4 **verticale**",
+      cleanSheet.cleanSheet !== null &&
+        cleanSheet.cleanDrawing !== null &&
+        // Con un solo mezzo (e con due) l'orientamento è verticale: 210 mm in
+        // larghezza × 297 mm in altezza, quindi il foglio è più alto che largo.
+        cleanSheet.cleanSheet.width < cleanSheet.cleanSheet.height &&
+        cleanSheet.cleanSheet.width > 700 &&
+        // Il disegno occupa la larghezza utile del foglio (210 mm meno gli 8 mm
+        // di padding per lato) e resta dentro l'altezza utile, ben oltre l'85%.
+        Math.abs(cleanSheet.cleanDrawing.width - (cleanSheet.cleanSheet.width - 60.5)) <= 3 &&
+        cleanSheet.cleanDrawing.height <= cleanSheet.cleanSheet.height - 60 &&
+        cleanSheet.cleanDrawing.height > cleanSheet.cleanSheet.height * 0.85,
+      `foglio ${cleanSheet.cleanSheet?.width}×${cleanSheet.cleanSheet?.height} px (gap ${cleanSheet.cleanSheet?.gap}), ` +
+        `disegno ${cleanSheet.cleanDrawing?.width}×${cleanSheet.cleanDrawing?.height} px`
     );
     await finishPrinting();
 
@@ -793,8 +811,10 @@ const main = async () => {
     const afterAllPrints = await printState();
     check(
       'Stampa a modalità: nessun attributo residuo e schermo interattivo intatto',
-      afterAllPrints.mode === null && afterAllPrints.calls === 4,
-      `data-print-mode=${JSON.stringify(afterAllPrints.mode)}, window.print() × ${afterAllPrints.calls}`
+      afterAllPrints.mode === null && afterAllPrints.landscape === null && afterAllPrints.calls === 4,
+      `data-print-mode=${JSON.stringify(afterAllPrints.mode)}, data-print-landscape=${JSON.stringify(
+        afterAllPrints.landscape
+      )}, window.print() × ${afterAllPrints.calls}`
     );
 
     /* --- 6) "Salva con nome" con file già agganciato ---------------------- */

@@ -12,11 +12,14 @@
  *  `App.tsx`.
  *
  *  Regole di formato (`ProjectFile` in `types.ts`):
- *    - `version: 1` + `app: 'truck-planner'` → firma dello schema;
+ *    - `version: 2` + `app: 'truck-planner'` → firma dello schema della centrale
+ *      multi-pianale (`bays` da 1 a 3, `activeBayId`, `labelDensity`);
  *    - `timestamp` ISO 8601 del salvataggio;
- *    - nomi file leggibili e "sporco-free": la targa viene ripulita da ogni
- *      carattere non alfanumerico, così il file si apre senza sorprese su
- *      Windows, macOS e sui client di posta.
+ *    - **auto-migrazione**: i file dello schema v1 (a pianale singolo) vengono
+ *      riconosciuti, convalidati e convertiti al volo in un unico stallo;
+ *    - nomi file leggibili e "sporco-free": la targa del primo mezzo viene
+ *      ripulita da ogni carattere non alfanumerico, così il file si apre senza
+ *      sorprese su Windows, macOS e sui client di posta.
  *
  *  DUE MODALITÀ DI SALVATAGGIO (`saveProjectWithHandle`):
  *    1. **File System Access API** (Chrome / Edge su Windows e macOS): il modulo
@@ -28,7 +31,9 @@
  *       con tag `<a download>` (`exportProjectToJson`), esattamente come prima.
  * -------------------------------------------------------------------------- */
 
-import type { SideNote, PlacedItem, ProjectFile } from '../types';
+import type { DeckBay, SideNote, PlacedItem, ProjectFile } from '../types';
+import { createDefaultBay } from '../constants';
+import { resolveActiveBay } from './bays';
 import { PLATE_MAX_LENGTH } from './plateBadge';
 
 /** Prefisso del file quando la targa / identificativo del mezzo è compilata. */
@@ -155,7 +160,7 @@ export const buildProjectFileName = (plate: string): string => {
  * il salvataggio funziona anche completamente offline.
  */
 export const exportProjectToJson = (project: ProjectFile): void => {
-  const fileName = buildProjectFileName(project.plate ?? '');
+  const fileName = buildProjectFileName(project.bays[0]?.plate ?? '');
   const blob = new Blob([JSON.stringify(project, null, JSON_INDENT)], {
     type: JSON_MIME_TYPE,
   });
@@ -229,8 +234,78 @@ const isValidNote = (value: unknown): boolean => {
 };
 
 /**
- * Convalida il contenuto del file e lo restituisce tipizzato come `ProjectFile`.
- * Il messaggio di errore è già pronto per l'`alert` mostrato all'operatore.
+ * Convalida di uno stallo (`DeckBay`): identità, mezzo, targa, colli e note.
+ * L'errore riporta l'indice dello stallo per un messaggio immediato all'operatore.
+ */
+const validateBay = (value: unknown, index: number): DeckBay => {
+  if (!isPlainObject(value)) {
+    throw new ProjectFileError(
+      `File non valido: il mezzo in posizione ${index + 1} non è uno stallo leggibile.`
+    );
+  }
+
+  if (!isValidVehicle(value.vehicle)) {
+    throw new ProjectFileError(
+      `File non valido: il mezzo in posizione ${index + 1} ha una configurazione mancante o errata.`
+    );
+  }
+
+  if (!Array.isArray(value.items)) {
+    throw new ProjectFileError(
+      `File non valido: l'elenco dei colli del mezzo ${index + 1} è mancante o danneggiato.`
+    );
+  }
+  const invalidItem = (value.items as unknown[]).findIndex((item) => !isValidItem(item));
+  if (invalidItem >= 0) {
+    throw new ProjectFileError(
+      `File non valido: il collo in posizione ${invalidItem + 1} del mezzo ${index + 1} è incompleto o danneggiato.`
+    );
+  }
+
+  const rawNotes = value.notes ?? [];
+  if (!Array.isArray(rawNotes)) {
+    throw new ProjectFileError(
+      `File non valido: l'elenco delle note laterali del mezzo ${index + 1} è danneggiato.`
+    );
+  }
+  const invalidNote = (rawNotes as unknown[]).findIndex((note) => !isValidNote(note));
+  if (invalidNote >= 0) {
+    throw new ProjectFileError(
+      `File non valido: la nota laterale in posizione ${invalidNote + 1} del mezzo ${index + 1} è incompleta o danneggiata.`
+    );
+  }
+
+  const vehicle = value.vehicle as DeckBay['vehicle'];
+  return {
+    // ID di riserva quando il file non ne riporta uno: la flotta resta sempre
+    // identificabile e la selezione del mezzo attivo non può rompersi.
+    id: typeof value.id === 'string' && value.id.length > 0 ? value.id : `bay-${index + 1}`,
+    vehicle,
+    plate:
+      typeof value.plate === 'string'
+        ? value.plate.slice(0, PLATE_MAX_LENGTH)
+        : '',
+    items: value.items as PlacedItem[],
+    notes: rawNotes as SideNote[],
+  };
+};
+
+/** Densità etichette convalidata, con fallback al comportamento storico. */
+const validateLabelDensity = (value: unknown): ProjectFile['labelDensity'] =>
+  value === 'all' || value === 'client' || value === 'dimensions' || value === 'minimal'
+    ? value
+    : 'all';
+
+/**
+ * Convalida il contenuto del file e lo restituisce tipizzato come `ProjectFile`
+ * nello **schema v2**. Il messaggio di errore è già pronto per l'`alert` mostrato
+ * all'operatore.
+ *
+ * **Auto-migrazione v1 → v2:** un piano salvato dalla vecchia versione a pianale
+ * singolo (`vehicle`, `plate`, `items`, `notes` in radice, nessun `bays`) viene
+ * riconosciuto e convertito **istantaneamente** in un unico stallo (`bay-1`),
+ * senza perdere nemmeno un collo o una nota. Nessun file storico diventa
+ * illeggibile con l'arrivo della centrale multi-pianale.
  */
 const validateProject = (parsed: unknown): ProjectFile => {
   if (!isPlainObject(parsed)) {
@@ -239,6 +314,35 @@ const validateProject = (parsed: unknown): ProjectFile => {
     );
   }
 
+  // Campi di contorno: se assenti o incoerenti si ricade su valori sicuri,
+  // perché il piano resta comunque riapribile (colli e note sono già validati).
+  const timestamp =
+    typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString();
+  const labelDensity = validateLabelDensity(parsed.labelDensity);
+
+  /* --- SCHEMA v2: la centrale multi-pianale ------------------------------- */
+  if (Array.isArray(parsed.bays)) {
+    const bays = (parsed.bays as unknown[]).map((bay, index) => validateBay(bay, index));
+    if (bays.length === 0) {
+      // Flotta vuota: un piano di carico deve sempre avere almeno un pianale.
+      bays.push(createDefaultBay());
+    }
+
+    const requestedActiveId =
+      typeof parsed.activeBayId === 'string' ? parsed.activeBayId : '';
+    const activeBayId = resolveActiveBay(bays, requestedActiveId).id;
+
+    return {
+      version: 2,
+      app: 'truck-planner',
+      timestamp,
+      bays,
+      activeBayId,
+      labelDensity,
+    };
+  }
+
+  /* --- SCHEMA v1 (storico): auto-migrazione a stallo singolo -------------- */
   if (!isValidVehicle(parsed.vehicle)) {
     throw new ProjectFileError(
       'File non valido: manca la configurazione del mezzo o le sue dimensioni sono errate.'
@@ -255,36 +359,32 @@ const validateProject = (parsed: unknown): ProjectFile => {
     );
   }
 
-  if (!Array.isArray(parsed.notes)) {
+  const legacyNotes = parsed.notes ?? [];
+  if (!Array.isArray(legacyNotes)) {
     throw new ProjectFileError('File non valido: l\'elenco delle note laterali è danneggiato.');
   }
-  const invalidNote = (parsed.notes as unknown[]).findIndex((note) => !isValidNote(note));
+  const invalidNote = (legacyNotes as unknown[]).findIndex((note) => !isValidNote(note));
   if (invalidNote >= 0) {
     throw new ProjectFileError(
       `File non valido: la nota laterale in posizione ${invalidNote + 1} è incompleta o danneggiata.`
     );
   }
 
-  // Campi di contorno: se assenti o incoerenti si ricade su valori sicuri,
-  // perché il piano resta comunque riapribile (colli e note sono già validati).
-  const plate = typeof parsed.plate === 'string' ? parsed.plate.slice(0, PLATE_MAX_LENGTH) : '';
-  const timestamp = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString();
-  const labelDensity: ProjectFile['labelDensity'] =
-    parsed.labelDensity === 'all' ||
-    parsed.labelDensity === 'client' ||
-    parsed.labelDensity === 'dimensions' ||
-    parsed.labelDensity === 'minimal'
-      ? parsed.labelDensity
-      : 'all';
+  const migratedBay: DeckBay = {
+    id: 'bay-1',
+    vehicle: parsed.vehicle as DeckBay['vehicle'],
+    plate:
+      typeof parsed.plate === 'string' ? parsed.plate.slice(0, PLATE_MAX_LENGTH) : '',
+    items: parsed.items as PlacedItem[],
+    notes: legacyNotes as SideNote[],
+  };
 
   return {
-    version: 1,
+    version: 2,
     app: 'truck-planner',
     timestamp,
-    vehicle: parsed.vehicle as ProjectFile['vehicle'],
-    plate,
-    items: parsed.items as PlacedItem[],
-    notes: parsed.notes as SideNote[],
+    bays: [migratedBay],
+    activeBayId: migratedBay.id,
     labelDensity,
   };
 };
@@ -367,7 +467,7 @@ export const saveProjectWithHandle = async (
   existingHandle?: FileSystemFileHandle | null
 ): Promise<SaveProjectResult> => {
   const json = JSON.stringify(project, null, JSON_INDENT);
-  const defaultName = buildProjectFileName(project.plate ?? '');
+  const defaultName = buildProjectFileName(project.bays[0]?.plate ?? '');
 
   // 1) SOVRASCRITTURA IN-PLACE: il file già aperto viene riscritto sul posto.
   if (existingHandle) {

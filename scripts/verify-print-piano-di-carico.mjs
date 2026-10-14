@@ -125,9 +125,14 @@ const connect = async (wsUrl, timeoutMs = 8000) => {
 
 /* --- Lettura della scheda ------------------------------------------------- */
 
-/** Intestazione di Pagina 1 + dati del blocco mezzo (media `print` emulata). */
+/** Intestazione della pagina del **primo mezzo** + dati del blocco mezzo (media `print` emulata).
+ *
+ *  L'aggancio è `.print-bay-page`: nella centrale multi-pianale la pagina di
+ *  ciascun mezzo è una `.print-page.print-page-first` annidata, quindi il solo
+ *  `.print-page-first` non identifica più la pagina 1 (lo condivide con il
+ *  foglio panoramico della modalità "Solo Grafica"). */
 const READ_HEADER = `
-  const page = document.querySelector('#print-report .print-page-first');
+  const page = document.querySelector('#print-report .print-bay-page');
   const header = page.querySelector(':scope > header');
   const left = header.firstElementChild;
   const right = header.lastElementChild;
@@ -136,7 +141,7 @@ const READ_HEADER = `
   const nameLine = right.children[0];
   const dimensionLine = right.children[1];
   return {
-    title: h1.textContent.trim(),
+    title: h1.textContent.replace(/\\s+/g, ' ').trim(),
     titleClass: h1.className,
     titleFontWeight: getComputedStyle(h1).fontWeight,
     titleFontSize: getComputedStyle(h1).fontSize,
@@ -196,17 +201,18 @@ const READ_TABLE = `
         : null,
     };
   };
-  const first = document.querySelector('#print-report .print-page-first');
-  const second = document.querySelector('#print-report .print-page-second');
+  const first = document.querySelector('#print-report .print-bay-page');
+  const second = document.querySelector('#print-report .print-bay-table-page');
   const hint = first.querySelector('.print-table, div.text-center');
   return {
     tableCount: document.querySelectorAll('#print-report table').length,
     pageOneHasTable: !!first.querySelector('table'),
+    pageOneHasOwnTable: !!first.querySelector(':scope > .print-table'),
     pageTwoExists: !!second,
     pageTwoBreakBefore: second ? getComputedStyle(second).breakBefore : null,
     pageTwoHeader: second ? second.querySelector('header').textContent.replace(/\\s+/g, ' ').trim() : null,
-    hintText: first.querySelector('table') ? null : (hint ? hint.textContent.trim() : null),
-    hintStyle: first.querySelector('table')
+    hintText: first.querySelector(':scope > .print-table') ? null : (hint ? hint.textContent.trim() : null),
+    hintStyle: first.querySelector(':scope > .print-table')
       ? null
       : (() => {
           const el = first.querySelector('div.text-center');
@@ -220,8 +226,18 @@ const READ_TABLE = `
             textAlign: style.textAlign,
           };
         })(),
-    pageOne: readTable('#print-report .print-page-first'),
-    pageTwo: readTable('#print-report .print-page-second'),
+    pageOne: readTable('#print-report [data-print-bay-page]'),
+    pageTwo: readTable('#print-report [data-print-bay-table-page]'),
+    // Dimensioni reali della pagina del mezzo: il foglio A4 completo
+    // (210 × 297 mm, border-box, padding interno di 10 mm per lato).
+    pageOneHeightPx: (() => {
+      const page = document.querySelector('#print-report [data-print-bay-page]');
+      return page ? page.getBoundingClientRect().height : null;
+    })(),
+    pageOneWidthPx: (() => {
+      const page = document.querySelector('#print-report [data-print-bay-page]');
+      return page ? page.getBoundingClientRect().width : null;
+    })(),
   };
 `;
 
@@ -286,14 +302,29 @@ const main = async () => {
     const setPrintMedia = (print) =>
       cdp.send('Emulation.setEmulatedMedia', { media: print ? 'print' : 'screen' });
 
+    /**
+     * Riporta il documento allo stato di riposo: nessuna modalità di stampa e
+     * nessun foglio `@page` temporaneo in `<head>`. In Chrome headless il
+     * dialogo nativo di `window.print()` non si chiude, quindi l'evento
+     * `afterprint` che ripulisce lo stato dell'app può non arrivare mai: la
+     * pulizia esplicita evita che una prova precedente condizioni questa.
+     */
+    const resetPrintState = () =>
+      cdp.eval(`
+        document.documentElement.removeAttribute('data-print-mode');
+        document.getElementById('print-page-orientation')?.remove();
+        return 1;
+      `);
+    await resetPrintState();
+
     /* --- 1) Intestazione minimale (pianale vuoto) ------------------------ */
     await setPrintMedia(true);
-    await sleep(150);
+    await sleep(200);
     const header = await cdp.eval(READ_HEADER);
 
     check(
-      'Titolo ufficiale: "PIANO DI CARICO"',
-      header.title === 'PIANO DI CARICO',
+      'Titolo ufficiale: "PIANO DI CARICO — MEZZO 1" (una pagina per ciascun mezzo)',
+      header.title === 'PIANO DI CARICO — MEZZO 1',
       `titolo = "${header.title}"`
     );
     check(
@@ -313,8 +344,9 @@ const main = async () => {
       `sottotitolo = "${header.subtitle}"`
     );
     check(
-      'Blocco mezzo: nome configurazione in grassetto',
-      header.vehicleName === 'Bilico frigo Fiori' && header.vehicleNameWeight === '700',
+      'Blocco mezzo: nome della configurazione in grassetto (o la targa se compilata)',
+      /^(Bilico .+|Motrice .+|Personalizzato.*|[A-Z0-9 ]+)$/.test(header.vehicleName) &&
+        header.vehicleNameWeight === '700',
       `"${header.vehicleName}" (peso ${header.vehicleNameWeight})`
     );
     check(
@@ -348,9 +380,10 @@ const main = async () => {
       `tabelle=${twoRows.tableCount}, Pagina 1 con tabella=${twoRows.pageOneHasTable}, Pagina 2=${twoRows.pageTwoExists}, righe=${twoRows.pageOne?.bodyRows.length}`
     );
     check(
-      "Carico compatto: altezza della Pagina 1 pari all'area utile A4 (277 mm ≈ 1047 px)",
-      Math.abs(header.pageHeightPx - (277 / 25.4) * 96) < 2,
-      `${header.pageHeightPx.toFixed(2)} px (nessuna tabella, pianale vuoto)`
+      "Carico compatto: la Pagina 1 occupa l'intero foglio A4 (210 × 297 mm ≈ 794 × 1123 px)",
+      Math.abs(twoRows.pageOneHeightPx - (297 / 25.4) * 96) < 2 &&
+        Math.abs(twoRows.pageOneWidthPx - (210 / 25.4) * 96) < 2,
+      `${twoRows.pageOneWidthPx?.toFixed(2)} × ${twoRows.pageOneHeightPx?.toFixed(2)} px (pianale vuoto, tabella in calce)`
     );
     check(
       'Carico compatto: nessuna nota di rinvio a Pagina 2',
@@ -383,7 +416,7 @@ const main = async () => {
 
     check(
       'Carico articolato (4 righe): la tabella abbandona la Pagina 1',
-      fourRows.pageOneHasTable === false && fourRows.pageTwoExists === true && fourRows.tableCount === 1,
+      fourRows.pageOneHasOwnTable === false && fourRows.pageTwoExists === true && fourRows.tableCount === 1,
       `Pagina 1 con tabella=${fourRows.pageOneHasTable}, Pagina 2=${fourRows.pageTwoExists}, tabelle=${fourRows.tableCount}`
     );
     check(
@@ -402,10 +435,10 @@ const main = async () => {
       `testo = ${JSON.stringify(fourRows.hintText)}, stile = ${JSON.stringify(fourRows.hintStyle)}`
     );
     check(
-      'Pagina 2: header formale "PIANO DI CARICO — RIEPILOGO DETTAGLIATO COLLI" con data e nome mezzo',
+      'Pagina 2: header formale "MEZZO 1 — RIEPILOGO DETTAGLIATO COLLI" con data e nome mezzo',
       typeof fourRows.pageTwoHeader === 'string' &&
-        fourRows.pageTwoHeader.startsWith('PIANO DI CARICO — RIEPILOGO DETTAGLIATO COLLI') &&
-        fourRows.pageTwoHeader.includes('Bilico frigo Fiori') &&
+        fourRows.pageTwoHeader.startsWith('MEZZO 1 — RIEPILOGO DETTAGLIATO COLLI') &&
+        fourRows.pageTwoHeader.includes('Bilico') &&
         /\d{2}\/\d{2}\/\d{4} • \d{2}:\d{2}/.test(fourRows.pageTwoHeader),
       `"${fourRows.pageTwoHeader}"`
     );
@@ -467,21 +500,40 @@ const main = async () => {
     });
     const pageCount = countPdfPages(pdf.data);
     check(
-      'PDF con 4 righe: due pagine reali (salto pagina rispettato in stampa)',
+      'PDF con 4 righe: pagina del disegno + pagina del riepilogo (salto pagina rispettato in stampa)',
       pageCount.pageObjects === 2 || pageCount.counts.includes(2),
       `oggetti pagina = ${pageCount.pageObjects}, /Count = ${JSON.stringify(pageCount.counts)}`
     );
 
-    /* --- 5) Evidenze grafiche ------------------------------------------- */
+    /* --- 5) Evidenze grafiche ------------------------------------------- *
+     *  Nella centrale multi-pianale (sezione AM) la Pagina 2 di un mezzo **vive
+     *  dentro** la pagina del mezzo: è il motore di stampa a impaginarla grazie a
+     *  `break-before: page`, quindi a schermo (media di stampa emulato) il suo
+     *  riquadro resta dentro la pagina 1 mentre il contenuto (la tabella) può
+     *  sbordare più in basso. Le due clip vengono perciò calcolate sul **fondo
+     *  reale del contenuto** — il massimo fra i riquadri di tutti i discendenti
+     *  del report e l'altezza di scorrimento del documento — e mai come
+     *  differenza fra due quote che può diventare negativa (una clip con altezza
+     *  negativa blocca `Page.captureScreenshot`). */
     const geometry = await cdp.eval(`
-      const first = document.querySelector('#print-report .print-page-first');
-      const second = document.querySelector('#print-report .print-page-second');
+      const report = document.getElementById('print-report');
+      const first = report.querySelector('[data-print-bay-page]');
+      const second = report.querySelector('[data-print-bay-table-page]');
       const firstRect = first.getBoundingClientRect();
       const secondRect = second.getBoundingClientRect();
+      const contentBottom = [...report.querySelectorAll('*')].reduce(
+        (max, el) => Math.max(max, el.getBoundingClientRect().bottom),
+        Math.max(
+          report.getBoundingClientRect().bottom,
+          document.documentElement.scrollHeight,
+          firstRect.bottom,
+          secondRect.bottom
+        )
+      );
       return {
         width: Math.max(firstRect.width, secondRect.width),
-        firstHeight: firstRect.height,
-        secondBottom: secondRect.bottom,
+        secondTop: secondRect.top,
+        contentBottom,
       };
     `);
     const shotTwo = await cdp.send('Page.captureScreenshot', {
@@ -491,7 +543,7 @@ const main = async () => {
         x: 0,
         y: 0,
         width: Math.ceil(geometry.width),
-        height: Math.ceil(geometry.secondBottom) + 20,
+        height: Math.ceil(geometry.contentBottom) + 20,
         scale: 1,
       },
     });
@@ -504,9 +556,9 @@ const main = async () => {
       captureBeyondViewport: true,
       clip: {
         x: 0,
-        y: Math.floor(geometry.firstHeight),
+        y: Math.floor(geometry.secondTop),
         width: Math.ceil(geometry.width),
-        height: Math.ceil(geometry.secondBottom - geometry.firstHeight) + 20,
+        height: Math.max(1, Math.ceil(geometry.contentBottom - geometry.secondTop) + 20),
         scale: 1,
       },
     });

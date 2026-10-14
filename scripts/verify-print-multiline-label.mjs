@@ -325,7 +325,7 @@ const main = async () => {
           ${READ_PRINT_HELPERS}
           return {
             items: readPrintItems(),
-            svgText: document.querySelector('#print-report svg').textContent,
+            svgText: document.querySelector('#print-report [data-print-bay-page] svg').textContent,
           };
         `);
         return snapshot.items.length >= 2 && snapshot.items[0].texts[0]?.tspans.length === 3
@@ -393,7 +393,7 @@ const main = async () => {
 
     const legacy = await cdp.eval(`
       const print = document.getElementById('print-report');
-      const drawing = print.querySelector('svg').textContent;
+      const drawing = print.querySelector('[data-print-bay-page] svg').textContent;
       const full = print.textContent;
       return {
         truncatedInDrawing: drawing.includes(${JSON.stringify(LEGACY_TRUNCATED)}),
@@ -512,7 +512,14 @@ const main = async () => {
           ${READ_PRINT_HELPERS}
           const print = document.getElementById('print-report');
           const display = getComputedStyle(print).display;
-          const groups = Array.from(print.querySelectorAll('g[clip-path^="url(#print-clip-"]'));
+          /**
+           * I colli della scheda stampata. Il foglio panoramico della modalità
+           * "Solo Grafica" vive nello stesso documento ma è nascosto
+           * (display: none): i suoi gruppi restituirebbero rettangoli a zero e
+           * vanno quindi esclusi dalla misura geometrica.
+           */
+          const groups = Array.from(print.querySelectorAll('g[clip-path^="url(#print-clip-"]'))
+            .filter((g) => !g.closest('.print-clean-sheet'));
           const items = groups.map((g) => {
             const host = g.parentElement;
             const rect = host.querySelector(':scope > rect');

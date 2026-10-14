@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
 import type {
-  VehicleConfig,
   PlacedItem,
   ItemPositionUpdate,
   LabelDensity,
   SideNote,
+  DeckBay,
 } from '../types';
 import {
   calculateLdmMetrics,
@@ -61,11 +61,29 @@ import {
   WIDTH_QUOTA_BASELINE_CM,
   plateBadgeLayout,
 } from '../utils/plateBadge';
+import {
+  BAY_HEADER_BG,
+  BAY_HEADER_BG_ACTIVE,
+  BAY_HEADER_BORDER,
+  BAY_HEADER_BORDER_ACTIVE,
+  BAY_HEADER_HEIGHT_CM,
+  BAY_HEADER_PADDING_CM,
+  BAY_HEADER_TEXT,
+  BAY_HEADER_TEXT_ACTIVE,
+  BAY_HEADER_TITLE_FONT_CM,
+  BAY_HEADER_TOP_CM,
+  BAY_HEADER_WIDTH_CM,
+  bayLabel,
+  bayOffsets,
+} from '../utils/bays';
 
 /** Colori del rettangolo di selezione (lasso) e della selezione attiva. */
 const SELECTION_COLOR = '#2563EB';
 const LASSO_FILL = '#3B82F6';
 const LASSO_FILL_OPACITY = 0.15;
+
+/** Font di sistema delle etichette dell'header dello stallo (SVG). */
+const FONT_FAMILY_LABEL = 'Helvetica, Arial, sans-serif';
 
 /**
  * Spostamento minimo (px schermo) oltre il quale un drag non è più un click.
@@ -79,28 +97,42 @@ const NOTE_DRAG_THRESHOLD_CM = 0.2;
 const clipIdForNote = (noteId: string): string => `note-clip-${noteId}`;
 
 /* --- Clamp rigido intelligente del pan (asse Y) --------------------------- */
-/** Margine (px) riservato in alto alla didascalia "▲ CABINA ▲". */
+/** Margine (px) riservato in alto all'header dello stallo e alla targa. */
 const PAN_TOP_MARGIN_PX = 40;
 /** Margine (px) riservato in basso alla didascalia "PORTE POSTERIORI". */
 const PAN_BOTTOM_MARGIN_PX = 50;
 /**
- * Altezza (cm reali) della fascia sopra la Cabina occupata dal testo della targa
- * (corpo base 30 px), dalla didascalia `▲ CABINA ▲` e dalle quote: a zoom
- * elevato questa distanza cresce in pixel e gli elementi uscivano tagliati fuori
- * dal bordo alto del viewport. È **derivata** dal modulo condiviso
- * `utils/plateBadge.ts` (punto più alto dell'intestazione, `-71 cm`), quindi
- * ingrandire ancora il corpo della targa non può più tagliarne la cima: il
- * limite di pan del Caso B la include, scalata per lo zoom.
+ * Altezza (cm reali) della fascia sopra la Cabina occupata dall'**header dello
+ * stallo**, dal testo della targa (corpo base 30 px), dalla didascalia
+ * `▲ CABINA ▲` e dalle quote: a zoom elevato questa distanza cresce in pixel e
+ * gli elementi uscivano tagliati fuori dal bordo alto del viewport. È **derivata**
+ * dal modulo condiviso `utils/bays.ts` (header) e `utils/plateBadge.ts` (targa):
+ * il punto più alto in assoluto è il bordo superiore dell'header, quindi
+ * ingrandire ancora il corpo della targa non può più tagliarne la cima.
  */
-const CABINA_LABEL_OFFSET_CM = -PLATE_BADGE_TOP_CM;
+const CABINA_LABEL_OFFSET_CM = -Math.min(BAY_HEADER_TOP_CM, PLATE_BADGE_TOP_CM);
+
+/**
+ * Altezza logica (cm) della scena **sopra la Cabina**: la fascia che ospita
+ * l'header dello stallo, la targa e le didascalie.
+ *
+ * `fitView` e il clamp del pan lavorano sull'**altezza logica complessiva**
+ * (`layoutLength + CABINA_ELEVATION_CM`), non sulla sola lunghezza del mezzo:
+ * senza questo margine l'inquadratura "adatta a schermo" taglierebbe fuori
+ * proprio l'intestazione degli stalli. Il difetto non si vede con un solo mezzo
+ * (dove la fascia resta a schermo per via del padding) ma diventa evidente con
+ * più mezzi affiancati, perché lo zoom d'insieme è più basso.
+ */
+const CABINA_ELEVATION_CM = CABINA_LABEL_OFFSET_CM;
 /**
  * Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo
  * per decidere se il pianale entra interamente nello schermo (Caso A).
  *
- * Vale il **doppio** della fascia di intestazione: nel Caso A il pianale è
- * centrato e metà del margine finisce sopra la Cabina, quindi servono almeno
- * `2 × CABINA_LABEL_OFFSET_CM` perché la targa a 30 px non venga mai tagliata
- * dal bordo alto anche nella condizione limite `(L + margine) × zoom = containerH`.
+ * Vale il **doppio** della fascia di intestazione: nel Caso A la centrale è
+ * centrata e metà del margine finisce sopra la Cabina, quindi servono almeno
+ * `2 × CABINA_LABEL_OFFSET_CM` perché l'header dello stallo e la targa non
+ * vengano mai tagliati dal bordo alto anche nella condizione limite
+ * `(L + margine) × zoom = containerH`.
  */
 const PAN_LABEL_MARGIN_CM = 2 * CABINA_LABEL_OFFSET_CM;
 
@@ -119,9 +151,9 @@ const PAN_LABEL_MARGIN_CM = 2 * CABINA_LABEL_OFFSET_CM;
  *   (`(effectiveLength + PAN_LABEL_MARGIN_CM) * zoom <= containerH`): il pianale
  *   resta centrato verticalmente nel viewport e non può scivolare via.
  * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
- *   si arresta a ridosso del bordo alto (`maxPanY = 40 + 55 * zoom`, che tiene
- *   dentro anche il badge targa e la didascalia `▲ CABINA ▲`) e le Porte
- *   posteriori a ridosso di quello basso
+ *   si arresta a ridosso del bordo alto (`maxPanY = 40 + offset × zoom`, che
+ *   tiene dentro anche l'header dello stallo, il badge targa e la didascalia
+ *   `▲ CABINA ▲`) e le Porte posteriori a ridosso di quello basso
  *   (`minPanY = containerH - 50 - effectiveLength * zoom`).
  */
 const clampPanY = (
@@ -191,23 +223,34 @@ interface ViewTransform {
 }
 
 /**
- * Reset / Adatta a schermo: calcola lo zoom che fa entrare l'intero
- * semirimorchio nel viewport (con margine per le scritte Cabina/Porte)
- * e il pan che lo centra esattamente.
+ * Reset / Adatta a schermo: calcola lo zoom che fa entrare **l'intera centrale**
+ * nel viewport — tutti i pianali affiancati con la loro intestazione (header
+ * dello stallo, targa e didascalie) — e il pan che la centra esattamente.
+ *
+ * L'inquadratura è guidata da due soli numeri: la larghezza totale della scena
+ * (`totalWidth`, cioè i soli pianali reali) e l'**altezza logica**
+ * (`logicalLength`, cioè la lunghezza del mezzo più profondo più la fascia sopra
+ * la Cabina). Con un solo mezzo il risultato coincide con la vista storica del
+ * singolo pianale, intestazione compresa, e il mezzo torna a grandezza piena.
  */
-const fitView = (vehicle: VehicleConfig, viewport: ViewportSize): ViewTransform => {
+const fitView = (
+  totalWidth: number,
+  logicalLength: number,
+  viewport: ViewportSize
+): ViewTransform => {
   const availableW = Math.max(1, viewport.w - FIT_PADDING_X);
   const availableH = Math.max(1, viewport.h - FIT_PADDING_Y);
-  const fitZoom = Math.max(
-    0.01,
-    Math.min(availableW / vehicle.width, availableH / vehicle.length)
-  );
+  const safeWidth = Math.max(1, totalWidth);
+  const safeLength = Math.max(1, logicalLength);
+  const fitZoom = Math.max(0.01, Math.min(availableW / safeWidth, availableH / safeLength));
 
   return {
     zoom: fitZoom,
     pan: {
-      x: (viewport.w - vehicle.width * fitZoom) / 2,
-      y: (viewport.h - vehicle.length * fitZoom) / 2,
+      x: (viewport.w - safeWidth * fitZoom) / 2,
+      // La Cabina (Y = 0) lascia in alto la fascia dell'intestazione: il pianale
+      // risulta così centrato sul proprio ingombro reale, header compreso.
+      y: (viewport.h - safeLength * fitZoom) / 2 + CABINA_ELEVATION_CM * fitZoom,
     },
     fitZoom,
   };
@@ -240,7 +283,13 @@ const zoomAroundPoint = (prev: ViewTransform, nextZoom: number, mouse: Point): V
 interface DragState {
   /** ID del collo afferrato dal puntatore (quello che guida lo snap). */
   primaryId: string;
-  /** Cursore in cm reali al momento del pointerdown. */
+  /**
+   * Traslazione orizzontale (cm) dello stallo a cui appartiene il gesto: le
+   * coordinate dei colli sono **locali**, quindi il cursore va riportato nel
+   * sistema locale dello stallo prima di calcolare delta e snap.
+   */
+  bayOffsetCm: number;
+  /** Cursore in cm reali **locali allo stallo** al momento del pointerdown. */
   startCursor: Point;
   /** Posizione di partenza del collo afferrato (cm). */
   startX: number;
@@ -267,10 +316,14 @@ interface DragState {
  */
 interface NoteDragState {
   id: string;
-  /** Cursore in cm reali al momento del pointerdown. */
+  /** Traslazione orizzontale (cm) dello stallo di appartenenza della nota. */
+  bayOffsetCm: number;
+  /** Larghezza utile (cm) del mezzo: delimita lo spazio di lavoro della nota. */
+  vehicleWidth: number;
+  /** Cursore in cm reali **locali allo stallo** al momento del pointerdown. */
   startCursorX: number;
   startCursorY: number;
-  /** Posizione di partenza della nota (cm). */
+  /** Posizione di partenza della nota (cm, locali allo stallo). */
   startX: number;
   startY: number;
   /** Spostamento minimo (cm) che ha già promosso il gesto a trascinamento. */
@@ -284,7 +337,11 @@ interface NoteDragState {
  */
 interface NoteResizeState {
   id: string;
-  /** Cursore in cm reali al momento del pointerdown sulla maniglia. */
+  /** Traslazione orizzontale (cm) dello stallo di appartenenza della nota. */
+  bayOffsetCm: number;
+  /** Larghezza utile (cm) del mezzo a cui appartiene la nota. */
+  vehicleWidth: number;
+  /** Cursore in cm reali **locali allo stallo** al momento del pointerdown. */
   startCursorX: number;
   startCursorY: number;
   /** Dimensioni di partenza del box (cm). */
@@ -295,22 +352,24 @@ interface NoteResizeState {
 }
 
 interface TruckCanvasProps {
-  vehicle: VehicleConfig;
-  items: PlacedItem[];
-  /** Note laterali: vivono nella corsia a destra della parete del mezzo. */
-  notes: SideNote[];
   /**
-   * Targa / identificativo del mezzo: disegnato nel badge tecnico sopra la
-   * Cabina, centrato sull'asse del pianale e aggiornato in tempo reale. Un click
-   * sul badge riporta il focus sul campo di testo della sidebar.
+   * **Flotta** degli stalli affiancati (da 1 a `MAX_BAYS`): ogni mezzo è un mondo
+   * a sé con il proprio pianale, i propri colli e le proprie note, su coordinate
+   * **locali**. La traslazione orizzontale che li affianca vive in
+   * `utils/bays.ts` ed è pura presentazione: nessuna coordinata salvata dipende
+   * dalla posizione dello stallo nella scena.
    */
-  plate: string;
+  bays: DeckBay[];
+  /** Stallo attivo: unico bersaglio di sidebar e ispettore. */
+  activeBayId: string;
   selectedItemIds: string[];
   /** Nota selezionata (null = nessuna): bordo blu sulla card e pannello sidebar. */
   selectedNoteId: string | null;
   /** Densità delle etichette stampate dentro i colli. */
   labelDensity: LabelDensity;
   onChangeLabelDensity: (density: LabelDensity) => void;
+  /** Cambio del Mezzo Attivo (click sull'header dello stallo o sul suo pianale). */
+  onSelectBay: (bayId: string) => void;
   onSelectItems: (ids: string[]) => void;
   /** Selezione di una nota (azzera la selezione dei colli). */
   onSelectNote: (id: string | null) => void;
@@ -331,14 +390,13 @@ interface TruckCanvasProps {
 }
 
 export const TruckCanvas: React.FC<TruckCanvasProps> = ({
-  vehicle,
-  items,
-  notes,
-  plate,
+  bays,
+  activeBayId,
   selectedItemIds,
   selectedNoteId,
   labelDensity,
   onChangeLabelDensity,
+  onSelectBay,
   onSelectItems,
   onSelectNote,
   onUpdateNotePos,
@@ -369,78 +427,119 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const { zoom, pan, fitZoom } = view;
 
-  // Calcolo delle tacche metriche ogni metro (100 cm)
-  const meterMarkers = [];
-  for (let y = 100; y < vehicle.length; y += 100) {
-    meterMarkers.push(y);
+  // Calcolo delle tacche metriche ogni metro (100 cm).
+  // Ogni stallo disegna le proprie: qui si prepara la sola sequenza delle quote.
+
+  /**
+   * NOTE LATERALI dello stallo attivo: posizionamento **liberamente 2D**. Di
+   * default nascono a `X = vehicle.width + NOTE_LANE_OFFSET_CM` (subito a destra
+   * della parete), ma possono essere trascinate ovunque attorno al camion — anche
+   * a sinistra del rimorchio. Le card non entrano mai nel calcolo dei metri
+   * lineari e nessuna viene spostata d'ufficio: `resolveNoteLayouts` si limita a
+   * misurarle.
+   */
+  const selectedNoteIdSet = new Set(selectedNoteId ? [selectedNoteId] : []);
+  /** Set degli ID selezionati: vale per il solo stallo attivo (selezione locale). */
+  const selectedIdSet = new Set(selectedItemIds);
+
+  /* ------------------------------------------------------------------------ *
+   *  GEOMETRIA DELLA CENTRALE MULTI-PIANALE
+   *
+   *  Ogni stallo è un mondo di coordinate **locali**: la traslazione che lo
+   *  affianca (`bayOffsets`, da `utils/bays.ts`) è pura presentazione. Il modello
+   *  di vista qui sotto precalcola, per ciascun mezzo, tutto ciò che serve al
+   *  disegno (tacche metriche, quota nominale, contatore LDM, targa e note): il
+   *  ciclo di rendering resta così una semplice lettura.
+   * ------------------------------------------------------------------------ */
+  const offsets = bayOffsets(bays);
+  const activeBay = bays.find((bay) => bay.id === activeBayId) ?? bays[0];
+
+  /**
+   * Modello di vista di un singolo stallo: tutto ciò che dipende dalle sue
+   * coordinate locali, già risolto una volta sola.
+   */
+  interface BayViewModel {
+    bay: DeckBay;
+    index: number;
+    /** Traslazione orizzontale (cm) dello stallo nel mondo. */
+    offset: number;
+    items: PlacedItem[];
+    notes: SideNote[];
+    /** Tacche metriche ogni metro (cm). */
+    meterMarkers: number[];
+    /** `true` se il mezzo raggiunge la quota nominale di 13,20 m. */
+    showsNominalQuota: boolean;
+    /** Quota di fondo dinamica: `max(vehicle.length, ultimo collo sbordato)`. */
+    effectiveLength: number;
+    /** Metri lineari occupati, dalla funzione condivisa `calculateLdmMetrics`. */
+    ldm: ReturnType<typeof calculateLdmMetrics>;
+    showsLdmIndicator: boolean;
+    ldmIsSymmetric: boolean;
+    leftLdmBadgeColor: string;
+    rightLdmBadgeColor: string;
+    rightLdmBadgeLeftX: number;
+    rightLdmBadgeCenterX: number;
+    /** Badge targa (null a targa vuota): geometria dal modulo condiviso. */
+    plateBadge: ReturnType<typeof plateBadgeLayout>;
+    /** Card delle note laterali, con la stessa geometria delle tre rese. */
+    noteLayouts: ReturnType<typeof resolveNoteLayouts>;
   }
 
-  // Quota nominale 13,20 m: tracciata solo sui mezzi che la raggiungono.
-  const showsNominalQuota = vehicle.length >= NOMINAL_QUOTA_CM;
+  const bayViews: BayViewModel[] = bays.map((bay, index) => {
+    const bayLdm = calculateLdmMetrics(bay.vehicle, bay.items);
+    const maxItemBottom = bay.items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
+    // Lato più carico = badge scuro primario; lato meno carico = slate intermedio.
+    const leftIsHeavier = bayLdm.leftY >= bayLdm.rightY;
 
-  /**
-   * Contatore dinamico LDM (metri lineari occupati), calcolato con la **Regola
-   * della Corsia di Parete** dalla funzione pura condivisa `calculateLdmMetrics`:
-   * un collo impegna una corsia di parete solo se la tocca davvero, mentre i
-   * colli a tutta larghezza (es. Sfuso) occupano inevitabilmente entrambe le
-   * corsie. La stessa funzione alimenta l'export PNG e la scheda di stampa A4,
-   * quindi le tre rese non possono divergere.
-   */
-  const midX = vehicle.width / 2;
-  const ldm = calculateLdmMetrics(vehicle, items);
-  const leftOccupiedY = ldm.leftY;
-  const rightOccupiedY = ldm.rightY;
-  const maxOccupiedY = ldm.maxOccupiedY;
+    return {
+      bay,
+      index,
+      offset: offsets[index],
+      items: bay.items,
+      notes: bay.notes,
+      meterMarkers: Array.from(
+        { length: Math.max(0, Math.ceil(bay.vehicle.length / 100) - 1) },
+        (_, i) => (i + 1) * 100
+      ).filter((y) => y < bay.vehicle.length),
+      showsNominalQuota: bay.vehicle.length >= NOMINAL_QUOTA_CM,
+      effectiveLength: Math.max(bay.vehicle.length, maxItemBottom),
+      ldm: bayLdm,
+      showsLdmIndicator: labelDensity !== 'minimal' && bayLdm.maxOccupiedY > 0,
+      ldmIsSymmetric: !bayLdm.isAsymmetric,
+      leftLdmBadgeColor: leftIsHeavier ? LDM_BADGE_COLOR : LDM_BADGE_MUTED_COLOR,
+      rightLdmBadgeColor: leftIsHeavier ? LDM_BADGE_MUTED_COLOR : LDM_BADGE_COLOR,
+      rightLdmBadgeLeftX: ldmBadgeRightLeftX(bay.vehicle.width),
+      rightLdmBadgeCenterX: ldmBadgeRightCenterX(bay.vehicle.width),
+      plateBadge: plateBadgeLayout(bay.vehicle.width, bay.plate),
+      noteLayouts: resolveNoteLayouts(bay.notes),
+    };
+  });
 
+  const activeBayView = bayViews.find((view) => view.bay.id === activeBay?.id) ?? bayViews[0];
   /**
-   * Con densità etichette `minimal` il disegno resta volutamente pulito: le
-   * linee guida e i badge LDM vengono nascosti (il dato resta comunque nella
-   * tabella della scheda A4).
+   * Quota di fondo dinamica di riferimento per la vista: la più profonda fra i
+   * mezzi in scena. Il pan verticale della centrale si estende così fino a
+   * contenere anche il carico più lungo (o il collo sbordato più lontano).
    */
-  const showsLdmIndicator = labelDensity !== 'minimal' && maxOccupiedY > 0;
+  const layoutLength = Math.max(0, ...bayViews.map((view) => view.effectiveLength));
+  /**
+   * Altezza logica della scena: pianale più profondo **più** la fascia sopra la
+   * Cabina che ospita header dello stallo, targa e didascalie. È la misura su cui
+   * si calcola lo zoom "adatta a schermo", così l'intestazione dei mezzi non
+   * finisce mai fuori dal viewport.
+   */
+  const logicalLength = layoutLength + CABINA_ELEVATION_CM;
 
-  /**
-   * Quota di fondo dinamica: l'ingombro più profondo del carico può superare la
-   * lunghezza del mezzo (colli in eccesso accodati oltre le porte posteriori,
-   * fino a `REAR_OVERHANG_LIMIT`). La corsa di pan verticale si estende di
-   * conseguenza, così l'ultimo collo sbordato resta raggiungibile con la
-   * rotellina per selezionarlo, trascinarlo o eliminarlo. A pianale in sagoma
-   * `effectiveLength` coincide con `vehicle.length` e nulla cambia.
-   */
-  const maxItemBottom = items.reduce((max, item) => Math.max(max, item.y + item.length), 0);
-  const effectiveLength = Math.max(vehicle.length, maxItemBottom);
-  // Sotto la tolleranza di 1 cm i due lati sono considerati simmetrici.
-  const ldmIsSymmetric = !ldm.isAsymmetric;
-  // Lato più carico = badge scuro primario; lato meno carico = slate intermedio.
-  const leftLdmIsHeavier = leftOccupiedY >= rightOccupiedY;
-  const leftLdmBadgeColor = leftLdmIsHeavier ? LDM_BADGE_COLOR : LDM_BADGE_MUTED_COLOR;
-  const rightLdmBadgeColor = leftLdmIsHeavier ? LDM_BADGE_MUTED_COLOR : LDM_BADGE_COLOR;
-  // Badge del lato destro: subito oltre la parete destra del pianale.
-  const rightLdmBadgeLeftX = ldmBadgeRightLeftX(vehicle.width);
-  const rightLdmBadgeCenterX = ldmBadgeRightCenterX(vehicle.width);
-
-  /**
-   * Badge Targa / Identificativo Mezzo: **solo testo**, centrato sull'asse del
-   * pianale nella fascia di intestazione (corpo base 30 px), sopra la didascalia
-   * `▲ CABINA ▲`. La scritta può sforare di 50 cm per lato oltre le sponde: la
-   * geometria arriva dal modulo condiviso `utils/plateBadge.ts`, quindi canvas,
-   * snapshot PNG e scheda A4 disegnano esattamente la stessa scritta.
-   *
-   * A riposo — targa vuota o di soli spazi — la funzione restituisce `null`:
-   * l'area sopra la Cabina resta completamente pulita e trasparente, senza
-   * rettangoli tratteggiati né testi segnaposto.
-   */
-  const plateBadge = plateBadgeLayout(vehicle.width, plate);
-
-  /**
-   * Note laterali: posizionamento **liberamente 2D**. Di default nascono a
-   * `X = vehicle.width + NOTE_LANE_OFFSET_CM` (subito a destra della parete), ma
-   * possono essere trascinate ovunque attorno al camion — anche a sinistra del
-   * rimorchio. Le card non entrano mai nel calcolo dei metri lineari e nessuna
-   * viene spostata d'ufficio: `resolveNoteLayouts` si limita a misurarle.
-   */
-  const noteLayouts = resolveNoteLayouts(notes);
-  const selectedNoteIdSet = new Set(selectedNoteId ? [selectedNoteId] : []);
+  /* --- Ingombro orizzontale della scena ----------------------------------- *
+   *  Si contano **solo i pianali reali**: da X = 0 all'estremità destra
+   *  dell'ultimo mezzo in flotta. Nessuno spazio viene riservato a un ipotetico
+   *  stallo successivo, così con un solo camion l'inquadratura "adatta a
+   *  schermo" lo riporta a grandezza piena e perfettamente centrato. I nuovi
+   *  mezzi si aggiungono esclusivamente dal pulsante `+ Mezzo` della sidebar.
+   * ------------------------------------------------------------------------ */
+  const lastOffset = offsets[offsets.length - 1] ?? 0;
+  const lastBay = bays[bays.length - 1];
+  const totalWidth = lastBay ? lastOffset + lastBay.vehicle.width : 0;
 
   /**
    * Trascinamento di una nota: si aggiornano **entrambe** le coordinate in cm
@@ -448,14 +547,23 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
    * quota di fondo dinamica `effectiveLength` (Porte posteriori o ultimo collo
    * sbordato); la X può invece andare a sinistra del rimorchio (`X < 0`) o oltre
    * la parete destra, entro lo spazio di lavoro `noteMinX` / `noteMaxX`.
+   *
+   * Le coordinate delle note sono **locali allo stallo**: il cursore di mondo
+   * viene riportato in quel sistema sottraendo la traslazione `bayOffsetCm`.
    */
-  const handleNotePointerDown = (note: SideNote, e: React.PointerEvent) => {
+  const handleNotePointerDown = (
+    note: SideNote,
+    bayOffsetCm: number,
+    vehicleWidth: number,
+    e: React.PointerEvent
+  ) => {
     if (e.button !== 0) return;
     // Il gesto è della nota: non deve né selezionare i colli né panare la vista.
     e.stopPropagation();
 
     const cursor = toCanvasCm(e.clientX, e.clientY);
     if (!cursor) return;
+    const localX = cursor.x - bayOffsetCm;
 
     (e.target as Element).setPointerCapture(e.pointerId);
     onSelectNote(note.id);
@@ -464,10 +572,12 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     onBeginHistoryGesture();
     draggingNote.current = {
       id: note.id,
-      startCursorX: cursor.x,
+      startCursorX: localX,
       startCursorY: cursor.y,
       startX: note.x,
       startY: note.y,
+      bayOffsetCm,
+      vehicleWidth,
       moved: false,
     };
   };
@@ -480,6 +590,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const handleNoteResizePointerDown = (
     note: SideNote,
     height: number,
+    bayOffsetCm: number,
+    vehicleWidth: number,
     e: React.PointerEvent
   ) => {
     if (e.button !== 0) return;
@@ -495,10 +607,12 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     onBeginHistoryGesture();
     resizingNote.current = {
       id: note.id,
-      startCursorX: cursor.x,
+      startCursorX: cursor.x - bayOffsetCm,
       startCursorY: cursor.y,
       startWidth: note.width,
       startHeight: height,
+      bayOffsetCm,
+      vehicleWidth,
       moved: false,
     };
   };
@@ -530,17 +644,27 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     return viewport;
   };
 
-  /** Reset / Adatta: vista d'insieme completa del camion centrata. */
-  const resetView = () => setView(fitView(vehicle, measureViewport()));
+  /** Reset / Adatta: vista d'insieme completa della centrale, centrata. */
+  const resetView = () => setView(fitView(totalWidth, logicalLength, measureViewport()));
 
-  // Adatta a schermo al primo render utile e ad ogni cambio mezzo
-  // (pattern React di "aggiustamento dello stato durante il render").
-  const fitSignature = `${vehicle.id}:${vehicle.width}:${vehicle.length}`;
+  /**
+   * Firma della **struttura della scena**: cambia quando cambia il numero di
+   * stalli o le loro dimensioni — cioè ogni volta che l'inquadratura d'insieme
+   * va rifatta. Il passaggio da un mezzo all'altro (stessa flotta) **non** la
+   * cambia: la vista resta dove l'operatore l'ha lasciata.
+   *
+   * Nota: il clamp verticale fa parte del disegno, non della firma. Un carico
+   * appena aggiunto non deve far saltare lo zoom: la corsa verticale viene
+   * riallineata dal secondo effetto qui sotto.
+   */
+  const fitSignature = bays
+    .map((bay) => `${bay.id}:${bay.vehicle.width}:${bay.vehicle.length}`)
+    .join('|');
   const [fittedSignature, setFittedSignature] = useState<string | null>(null);
   const isViewportReady = viewport.w > 0 && viewport.h > 0;
   if (isViewportReady && fittedSignature !== fitSignature) {
     setFittedSignature(fitSignature);
-    setView(fitView(vehicle, viewport));
+    setView(fitView(totalWidth, logicalLength, viewport));
   }
 
   /**
@@ -551,10 +675,10 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
    * nello spazio grigio in attesa di un altro movimento di rotellina.
    */
   const [clampedLength, setClampedLength] = useState<number | null>(null);
-  if (isViewportReady && clampedLength !== effectiveLength) {
-    setClampedLength(effectiveLength);
+  if (isViewportReady && clampedLength !== layoutLength) {
+    setClampedLength(layoutLength);
     setView((prev) => {
-      const clampedY = clampPanY(prev.pan.y, prev.zoom, effectiveLength, viewport.h);
+      const clampedY = clampPanY(prev.pan.y, prev.zoom, layoutLength, viewport.h);
       if (clampedY === prev.pan.y) return prev;
       return { ...prev, pan: { ...prev.pan, y: clampedY } };
     });
@@ -614,7 +738,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             ...zoomed,
             pan: {
               ...zoomed.pan,
-              y: clampPanY(zoomed.pan.y, zoomed.zoom, effectiveLength, containerHeight),
+              y: clampPanY(zoomed.pan.y, zoomed.zoom, layoutLength, containerHeight),
             },
           };
         });
@@ -641,14 +765,14 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         ...prev,
         pan: {
           ...prev.pan,
-          y: clampPanY(prev.pan.y - deltaY, prev.zoom, effectiveLength, containerHeight),
+          y: clampPanY(prev.pan.y - deltaY, prev.zoom, layoutLength, containerHeight),
         },
       }));
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [effectiveLength]);
+  }, [layoutLength]);
 
   // --- Sfondo: Pan (drag semplice) oppure Lasso (Shift + drag) --------------
   const handleBackgroundPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -673,9 +797,17 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   };
 
   // --- Drag dei colli (singolo o di gruppo) ---------------------------------
-  const handlePointerDown = (item: PlacedItem, e: React.PointerEvent) => {
+  /**
+   * Pointerdown su un collo. `bay` è lo stallo a cui il collo appartiene: se non
+   * è quello attivo il click lo **attiva** (senza rubare il gesto: il
+   * trascinamento prosegue regolarmente sul pianale appena selezionato).
+   */
+  const handlePointerDown = (item: PlacedItem, bay: DeckBay, e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+
+    // Il collo appartiene a un altro mezzo: quel mezzo diventa l'attivo.
+    if (bay.id !== activeBayId) onSelectBay(bay.id);
 
     // Cmd (macOS) / Ctrl (Windows) + click → toggle dell'ID nella selezione.
     const additive = e.metaKey || e.ctrlKey;
@@ -705,9 +837,15 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     (e.target as Element).setPointerCapture(e.pointerId);
 
+    /**
+     * Traslazione dello stallo del collo afferrato: il cursore di mondo viene
+     * riportato nel sistema **locale** dello stallo, dove vivono `item.x`/`item.y`.
+     */
+    const bayOffsetCm = offsets[bays.findIndex((other) => other.id === bay.id)] ?? 0;
+
     // Congela il gruppo: il drag partirà solo se il puntatore si muove davvero.
     const memberIds = new Set(nextIds);
-    const members = items
+    const members = bay.items
       .filter((other) => memberIds.has(other.id))
       .map((other) => ({
         id: other.id,
@@ -723,7 +861,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     draggingItem.current = {
       primaryId: item.id,
-      startCursor: cursor,
+      bayOffsetCm,
+      startCursor: { x: cursor.x - bayOffsetCm, y: cursor.y },
       startX: item.x,
       startY: item.y,
       primaryWidth: item.width,
@@ -740,9 +879,10 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     if (resize) {
       const cursor = toCanvasCm(e.clientX, e.clientY);
       if (!cursor) return;
+      const localX = cursor.x - resize.bayOffsetCm;
       const width = Math.max(
         NOTE_MIN_WIDTH_CM,
-        Math.min(NOTE_MAX_WIDTH_CM, resize.startWidth + (cursor.x - resize.startCursorX))
+        Math.min(NOTE_MAX_WIDTH_CM, resize.startWidth + (localX - resize.startCursorX))
       );
       const height = Math.max(
         NOTE_MIN_HEIGHT_CM,
@@ -762,15 +902,15 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     if (noteDrag) {
       const cursor = toCanvasCm(e.clientX, e.clientY);
       if (!cursor) return;
-      const deltaX = cursor.x - noteDrag.startCursorX;
+      const deltaX = cursor.x - noteDrag.bayOffsetCm - noteDrag.startCursorX;
       const deltaY = cursor.y - noteDrag.startCursorY;
       if (Math.hypot(deltaX, deltaY) > NOTE_DRAG_THRESHOLD_CM) noteDrag.moved = true;
       if (!noteDrag.moved) return;
       const nextX = Math.max(
-        noteMinX(vehicle.width),
-        Math.min(noteMaxX(vehicle.width), noteDrag.startX + deltaX)
+        noteMinX(noteDrag.vehicleWidth),
+        Math.min(noteMaxX(noteDrag.vehicleWidth), noteDrag.startX + deltaX)
       );
-      const nextY = Math.max(0, Math.min(effectiveLength, noteDrag.startY + deltaY));
+      const nextY = Math.max(0, Math.min(layoutLength, noteDrag.startY + deltaY));
       onUpdateNotePos(noteDrag.id, nextX, nextY);
       return;
     }
@@ -803,7 +943,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
           y: clampPanY(
             panning.pan.y + (current.y - panning.start.y),
             prev.zoom,
-            effectiveLength,
+            layoutLength,
             panHeight
           ),
         },
@@ -812,13 +952,22 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     }
 
     // 3) Trascinamento (singolo o di gruppo), sempre in centimetri reali.
+    //    Il cursore di mondo viene riportato nel sistema LOCALE dello stallo del
+    //    collo afferrato: `item.x`/`item.y` sono coordinate del pianale.
     const drag = draggingItem.current;
     if (!drag) return;
     const cursor = toCanvasCm(e.clientX, e.clientY);
     if (!cursor) return;
 
-    const deltaX = cursor.x - drag.startCursor.x;
+    const deltaX = cursor.x - drag.bayOffsetCm - drag.startCursor.x;
     const deltaY = cursor.y - drag.startCursor.y;
+
+    // Colli e sagoma del mezzo a cui appartiene il gesto: lo snap magnetico non
+    // deve mai agganciarsi ai bancali di un altro stallo della centrale.
+    const dragView = bayViews.find((view) => view.bay.id === activeBay?.id) ?? bayViews[0];
+    if (!dragView) return;
+    const dragVehicle = dragView.bay.vehicle;
+    const dragItems = dragView.items;
 
     // Il collo afferrato guida lo snap magnetico su pareti e colli esterni al
     // gruppo; gli altri membri ricevono poi lo stesso delta.
@@ -828,8 +977,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
       drag.startY + deltaY,
       drag.primaryWidth,
       drag.primaryLength,
-      vehicle,
-      items.filter((other) => !groupIds.has(other.id))
+      dragVehicle,
+      dragItems.filter((other) => !groupIds.has(other.id))
     );
 
     let dx = snapped.x - drag.startX;
@@ -844,11 +993,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
     for (const member of drag.members) {
       dxMin = Math.max(dxMin, -member.startX);
-      dxMax = Math.min(dxMax, vehicle.width - member.width - member.startX);
+      dxMax = Math.min(dxMax, dragVehicle.width - member.width - member.startX);
       dyMin = Math.max(dyMin, -member.startY);
       dyMax = Math.min(
         dyMax,
-        vehicle.length + REAR_OVERHANG_LIMIT - member.length - member.startY
+        dragVehicle.length + REAR_OVERHANG_LIMIT - member.length - member.startY
       );
     }
 
@@ -867,7 +1016,12 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     onUpdateItemsPos(updates);
   };
 
-  /** Selezione via lasso: AABB in cm tra il rettangolo tracciato e ogni collo. */
+  /**
+   * Selezione via lasso: AABB in cm **di mondo** tra il rettangolo tracciato e
+   * ogni collo di **tutti** gli stalli (le coordinate locali vengono traslate
+   * nella loro origine di mondo). Così un solo gesto può raccogliere bancali da
+   * più mezzi affiancati, esattamente come si vede a schermo.
+   */
   const applyLassoSelection = (endCm: Point) => {
     const start = lassoStart.current;
     if (!start) return;
@@ -877,13 +1031,29 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     const width = Math.abs(endCm.x - start.x);
     const length = Math.abs(endCm.y - start.y);
 
-    const hitItemIds = items
-      .filter((item) => isRectColliding(x, y, width, length, item))
-      .map((item) => item.id);
+    const hitItemIds = bayViews.flatMap((view) =>
+      view.items
+        .filter((item) =>
+          isRectColliding(x - view.offset, y, width, length, item)
+        )
+        .map((item) => item.id)
+    );
 
     // Selezione ESCLUSIVA: il lasso sostituisce integralmente la selezione
     // corrente. Qualsiasi collo selezionato in precedenza e non intersecato dal
     // rettangolo viene deselezionato all'istante (nessuna selezione cumulativa).
+    if (hitItemIds.length === 0) {
+      onSelectItems([]);
+      return;
+    }
+
+    // Il lasso diventa il nuovo criterio di "mezzo attivo": vince lo stallo del
+    // primo collo raccolto, così l'ispettore comanda ciò che si è appena
+    // selezionato anche quando i colli arrivano da pianali diversi.
+    const owningBay = bayViews.find((view) =>
+      view.items.some((item) => item.id === hitItemIds[0])
+    );
+    if (owningBay && owningBay.bay.id !== activeBayId) onSelectBay(owningBay.bay.id);
     onSelectItems(hitItemIds);
   };
 
@@ -954,7 +1124,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         ...zoomed,
         pan: {
           ...zoomed.pan,
-          y: clampPanY(zoomed.pan.y, zoomed.zoom, effectiveLength, containerHeight),
+          y: clampPanY(zoomed.pan.y, zoomed.zoom, layoutLength, containerHeight),
         },
       };
     });
@@ -964,8 +1134,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
   const canZoomOut = zoom > fitZoom * MIN_ZOOM_RATIO + 0.0001;
   const canZoomIn = zoom < fitZoom * MAX_ZOOM_RATIO - 0.0001;
 
-  const selectedIdSet = new Set(selectedItemIds);
-  const selectedItems = items.filter((item) => selectedIdSet.has(item.id));
+  const selectedItems = (activeBayView?.items ?? []).filter((item) => selectedIdSet.has(item.id));
 
   // Involucro del gruppo selezionato: mostrato solo con selezione multipla,
   // per rendere evidente che i colli si muoveranno assieme.
@@ -1099,6 +1268,100 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     );
   };
 
+  /**
+   * Intestazione dello **stallo**: pillola a **riga singola** sopra la Cabina,
+   * centrata sulla larghezza del pianale, con il solo nome del mezzo
+   * (`MEZZO 1`) e la pillola `ATTIVO`.
+   *
+   * - stallo **attivo** → bordo blu primario `#2563EB`, fondo azzurrato e badge
+   *   `ATTIVO`;
+   * - stallo inattivo → bordo grigio tenue e testo ardesia.
+   *
+   * Targa e preset **non** sono ripetuti qui: la targa vive già nel proprio badge
+   * sopra la Cabina e il preset nel menu "Configurazione Mezzo" della sidebar.
+   * L'header è una pillola **pulita**: un click rende il mezzo attivo, mentre
+   * l'eliminazione è gestita esclusivamente dal pulsante `Elimina` della sidebar
+   * (nessuna icona "X" / cestino sul canvas). Vive alle **coordinate locali**
+   * dello stallo: è il gruppo traslato a portarlo nella posizione giusta.
+   */
+  const renderBayHeader = (view: BayViewModel): React.ReactNode => {
+    const isActive = view.bay.id === activeBayId;
+    // Pillola **centrata** sulla larghezza del pianale: con un solo mezzo il
+    // riquadro resta sull'asse del camion, con più mezzi non invade mai il
+    // pianale successivo (140 cm su 180 cm di stacco).
+    const headerX = (view.bay.vehicle.width - BAY_HEADER_WIDTH_CM) / 2;
+    // Bordo destro **utile**: il badge `ATTIVO` si accosta a questo margine.
+    const rightX = headerX + BAY_HEADER_WIDTH_CM - BAY_HEADER_PADDING_CM;
+
+    return (
+      <g
+        data-canvas-bay-header={view.bay.id}
+        className="cursor-pointer select-none"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          // Il click è dell'header: non deve azzerare la selezione dei colli.
+          e.stopPropagation();
+          onSelectBay(view.bay.id);
+        }}
+      >
+        {/* Pillola / Tab a riga singola: nome del mezzo e badge `ATTIVO` */}
+        <rect
+          x={headerX}
+          y={BAY_HEADER_TOP_CM}
+          width={BAY_HEADER_WIDTH_CM}
+          height={BAY_HEADER_HEIGHT_CM}
+          rx={6}
+          fill={isActive ? BAY_HEADER_BG_ACTIVE : BAY_HEADER_BG}
+          stroke={isActive ? BAY_HEADER_BORDER_ACTIVE : BAY_HEADER_BORDER}
+          strokeWidth={isActive ? 1.5 : 1}
+        />
+
+        {/* Nome dello stallo: `MEZZO 1` / `MEZZO 2` / `MEZZO 3`. Targa e preset
+            non vengono ripetuti qui: vivono già nel badge targa sopra la Cabina
+            e nel menu "Configurazione Mezzo" della sidebar. */}
+        <text
+          x={headerX + 10}
+          y={BAY_HEADER_TOP_CM + 17}
+          fontFamily={FONT_FAMILY_LABEL}
+          fontSize={BAY_HEADER_TITLE_FONT_CM}
+          fontWeight="800"
+          letterSpacing="0.04em"
+          fill={isActive ? BAY_HEADER_TEXT_ACTIVE : BAY_HEADER_TEXT}
+        >
+          {bayLabel(view.index)}
+        </text>
+
+        {/* Pillola `ATTIVO`: solo sullo stallo comandato da sidebar e ispettore.
+            Accostata al bordo destro utile dell'header, ora che nessun disco di
+            eliminazione occupa più quello spazio. */}
+        {isActive && (
+          <g>
+            <rect
+              x={rightX - 40}
+              y={BAY_HEADER_TOP_CM + 6}
+              width={40}
+              height={14}
+              rx={7}
+              fill={BAY_HEADER_BORDER_ACTIVE}
+            />
+            <text
+              x={rightX - 20}
+              y={BAY_HEADER_TOP_CM + 16}
+              textAnchor="middle"
+              fontFamily={FONT_FAMILY_LABEL}
+              fontSize={7.5}
+              fontWeight="bold"
+              letterSpacing="0.06em"
+              fill="#FFFFFF"
+            >
+              ATTIVO
+            </text>
+          </g>
+        )}
+      </g>
+    );
+  };
+
   return (
     <div className="relative w-full h-full overflow-hidden bg-slate-100 select-none">
       <div
@@ -1149,476 +1412,515 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
                 floodOpacity="0.14"
               />
             </filter>
-            {/* Un clipPath per ogni collo: il testo resta fisicamente dentro il
-                proprio rettangolo e non può sbordare sui colli adiacenti. */}
-            {items.map((item) => (
-              <clipPath key={item.id} id={clipIdForItem(item.id)}>
-                <rect width={item.width} height={item.length} />
-              </clipPath>
-            ))}
+            {/* Un clipPath per OGNI collo della centrale: il testo resta
+                fisicamente dentro il proprio rettangolo e non può sbordare sui
+                colli adiacenti, neppure su quelli di un altro mezzo. */}
+            {bayViews.flatMap((view) =>
+              view.items.map((item) => (
+                <clipPath key={item.id} id={clipIdForItem(item.id)}>
+                  <rect width={item.width} height={item.length} />
+                </clipPath>
+              ))
+            )}
             {/* Un clipPath per ogni nota: interviene solo se l'operatore ha
                 ridotto il box a un'altezza inferiore a quella del testo. */}
-            {noteLayouts.map(({ note, height }) => (
-              <clipPath key={note.id} id={clipIdForNote(note.id)}>
-                <rect width={note.width} height={height} />
-              </clipPath>
-            ))}
+            {bayViews.flatMap((view) =>
+              view.noteLayouts.map(({ note, height }) => (
+                <clipPath key={note.id} id={clipIdForNote(note.id)}>
+                  <rect width={note.width} height={height} />
+                </clipPath>
+              ))
+            )}
           </defs>
 
-          {/* MONDO VETTORIALE: origine (0,0) = angolo alto-sinistra del pianale
-              (Cabina in alto, Porte posteriori in basso). Unità = centimetri reali.
-              Nascosto finché il viewport non è misurato, così non c'è alcun flash. */}
+          {/* MONDO VETTORIALE: origine (0,0) = angolo alto-sinistra del PRIMO
+              pianale (Cabina in alto, Porte posteriori in basso). Unità =
+              centimetri reali; ogni stallo successivo è traslato di `offset` cm.
+              Nascosto finché il viewport non è misurato, così non c'è alcun flash.
+              `data-canvas-world` è l'aggancio stabile allo zoom/pan della vista:
+              i gruppi di stallo hanno una propria traslazione e non sono quindi
+              utilizzabili per risalire alla trasformazione del mondo. */}
           <g
+            data-canvas-world="world"
             transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}
             style={{ visibility: isViewportReady ? 'visible' : 'hidden' }}
           >
-            {/* Corpo del semirimorchio: oggetto vettoriale, nessun clipping ai lati */}
-            <rect
-              x={0}
-              y={0}
-              width={vehicle.width}
-              height={vehicle.length}
-              rx={4}
-              fill="white"
-              filter="url(#truck-shadow)"
-            />
-
-            {/* Parete frontale Cabina */}
-            <line
-              x1={0}
-              y1={0}
-              x2={vehicle.width}
-              y2={0}
-              stroke="#0F172A"
-              strokeWidth="4"
-            />
-
-            {/* Spalla Laterale Sinistra */}
-            <line
-              x1={0}
-              y1={0}
-              x2={0}
-              y2={vehicle.length}
-              stroke="#0F172A"
-              strokeWidth="3"
-            />
-
-            {/* Spalla Laterale Destra */}
-            <line
-              x1={vehicle.width}
-              y1={0}
-              x2={vehicle.width}
-              y2={vehicle.length}
-              stroke="#0F172A"
-              strokeWidth="3"
-            />
-
-            {/* Righelli metrici di fondo (linee ogni metro) */}
-            {meterMarkers.map((yVal) => (
-              <g key={yVal}>
-                <line
-                  x1={0}
-                  y1={yVal}
-                  x2={vehicle.width}
-                  y2={yVal}
-                  stroke="#E2E8F0"
-                  strokeDasharray="4 4"
-                  strokeWidth="1"
-                />
-                <text
-                  x={-8}
-                  y={yVal + 4}
-                  textAnchor="end"
-                  className="text-[10px] fill-slate-400 font-mono"
-                >
-                  {(yVal / 100).toFixed(0)}m
-                </text>
-              </g>
-            ))}
-
-            {/* Quota nominale 13,20 m: linea netta attraverso il pianale + dicitura
-                nel righello di sinistra. Presente solo sui mezzi da 13,20 m in su. */}
-            {showsNominalQuota && (
-              <g>
-                <line
-                  x1={0}
-                  y1={NOMINAL_QUOTA_CM}
-                  x2={vehicle.width}
-                  y2={NOMINAL_QUOTA_CM}
-                  stroke={NOMINAL_QUOTA_COLOR}
-                  strokeDasharray="6 3"
-                  strokeWidth="1.5"
-                />
-                <text
-                  x={-8}
-                  y={NOMINAL_QUOTA_CM + 4}
-                  textAnchor="end"
-                  className="text-[10px] font-bold fill-slate-600 font-mono"
-                >
-                  13.20m
-                </text>
-              </g>
-            )}
-
-            {/* Contatore dinamico LDM (metri lineari occupati), dalla funzione
-                condivisa `calculateLdmMetrics` con la Regola della Corsia di
-                Parete.
-                - Carico simmetrico: singolo indicatore a sinistra, linea guida
-                  continua alla Y massima, badge scuro `#1E293B`.
-                - Carico asimmetrico: due indicatori tratteggiati, ciascuno sulla
-                  propria metà pianale; il lato più carico ha il badge scuro
-                  primario, quello meno carico lo slate intermedio `#475569`.
-                  Il badge destro vive FUORI dalla parete destra.
-                - Densità `minimal`: nessuna linea e nessun badge (disegno pulito). */}
-            {showsLdmIndicator && ldmIsSymmetric && (
-              <g>
-                <line
-                  x1={0}
-                  y1={maxOccupiedY}
-                  x2={vehicle.width}
-                  y2={maxOccupiedY}
-                  stroke={LDM_GUIDE_COLOR}
-                  strokeWidth="1"
-                />
-                <rect
-                  x={LDM_BADGE_LEFT_X}
-                  y={maxOccupiedY - LDM_BADGE.height / 2}
-                  width={LDM_BADGE.width}
-                  height={LDM_BADGE.height}
-                  rx={3}
-                  fill={LDM_BADGE_COLOR}
-                />
-                <text
-                  x={LDM_BADGE_CENTER_X}
-                  y={maxOccupiedY + 3.5}
-                  textAnchor="middle"
-                  className="text-[10px] font-bold fill-white"
-                >
-                  ▶ {formatLdmMeters(maxOccupiedY)} m
-                </text>
-              </g>
-            )}
-
-            {showsLdmIndicator && !ldmIsSymmetric && (
-              <g>
-                {/* Indicatore SX: metà sinistra del pianale. */}
-                <line
-                  x1={0}
-                  y1={leftOccupiedY}
-                  x2={midX}
-                  y2={leftOccupiedY}
-                  stroke={LDM_GUIDE_COLOR}
-                  strokeWidth="1"
-                  strokeDasharray={LDM_GUIDE_DASH}
-                />
-                {/* Chiusura a filo mezzeria: il tratteggio non deve lasciare la
-                    linea "sospesa" prima dell'asse di mezzeria. */}
-                <line
-                  x1={Math.max(0, midX - LDM_GUIDE_CLOSING_LENGTH)}
-                  y1={leftOccupiedY}
-                  x2={midX}
-                  y2={leftOccupiedY}
-                  stroke={LDM_GUIDE_COLOR}
-                  strokeWidth="1"
-                />
-                <rect
-                  x={LDM_BADGE_LEFT_X}
-                  y={leftOccupiedY - LDM_BADGE.height / 2}
-                  width={LDM_BADGE.width}
-                  height={LDM_BADGE.height}
-                  rx={3}
-                  fill={leftLdmBadgeColor}
-                />
-                <text
-                  x={LDM_BADGE_CENTER_X}
-                  y={leftOccupiedY + 3.5}
-                  textAnchor="middle"
-                  className="text-[10px] font-bold fill-white"
-                >
-                  ▶ {formatLdmMeters(leftOccupiedY)} m
-                </text>
-
-                {/* Indicatore DX: metà destra del pianale, badge oltre la parete. */}
-                <line
-                  x1={midX}
-                  y1={rightOccupiedY}
-                  x2={vehicle.width}
-                  y2={rightOccupiedY}
-                  stroke={LDM_GUIDE_COLOR}
-                  strokeWidth="1"
-                  strokeDasharray={LDM_GUIDE_DASH}
-                />
-                {/* Chiusura a filo parete destra (stesso motivo del lato SX). */}
-                <line
-                  x1={Math.max(midX, vehicle.width - LDM_GUIDE_CLOSING_LENGTH)}
-                  y1={rightOccupiedY}
-                  x2={vehicle.width}
-                  y2={rightOccupiedY}
-                  stroke={LDM_GUIDE_COLOR}
-                  strokeWidth="1"
-                />
-                <rect
-                  x={rightLdmBadgeLeftX}
-                  y={rightOccupiedY - LDM_BADGE.height / 2}
-                  width={LDM_BADGE.width}
-                  height={LDM_BADGE.height}
-                  rx={3}
-                  fill={rightLdmBadgeColor}
-                />
-                <text
-                  x={rightLdmBadgeCenterX}
-                  y={rightOccupiedY + 3.5}
-                  textAnchor="middle"
-                  className="text-[10px] font-bold fill-white"
-                >
-                  ◀ {formatLdmMeters(rightOccupiedY)} m
-                </text>
-              </g>
-            )}
-
-            {/* Parete posteriore / PORTE */}
-            <line
-              x1={0}
-              y1={vehicle.length}
-              x2={vehicle.width}
-              y2={vehicle.length}
-              stroke="#0F172A"
-              strokeWidth="3"
-              strokeDasharray="16 8"
-            />
-
-            {/* BADGE TARGA / IDENTIFICATIVO MEZZO: **solo testo** monospaziato
-                tecnico, centrato sull'asse del pianale nella fascia di
-                intestazione (corpo base 30 px), sopra la didascalia ▲ CABINA ▲.
-                - **Silente a riposo:** con targa vuota il blocco non esiste
-                  affatto (nessun rettangolo, nessun tratteggio, nessun
-                  segnaposto): l'area sopra la Cabina è pulita e trasparente.
-                - **Zero bordo:** nessun contorno (`stroke="none"`), solo testo.
-                - **Gerarchia:** corpo base 30 px, il doppio dei 15 px di
-                  `▲ CABINA ▲`, ridotto solo per le targhe molto lunghe. La
-                  fascia di scrittura può sforare di 50 cm per lato oltre le
-                  sponde del mezzo (`vehicle.width + 100` cm).
-                Il click riporta il focus sul campo di testo della sidebar, così
-                il badge funziona da secondo aggancio della stessa informazione. */}
-            {plateBadge && (
-              <g
-                id="canvas-plate-badge"
-                className="cursor-pointer"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  // Il click è del badge: non deve azzerare la selezione dei colli.
-                  e.stopPropagation();
-                  document.getElementById(PLATE_INPUT_ID)?.focus();
-                }}
-              >
-                <text
-                  x={plateBadge.centerX}
-                  y={plateBadge.centerY}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontFamily={PLATE_BADGE_FONT_FAMILY}
-                  fontSize={plateBadge.fontSize}
-                  fontWeight="900"
-                  letterSpacing={`${PLATE_BADGE_LETTER_SPACING_EM}em`}
-                  stroke="none"
-                  strokeWidth={0}
-                  fill={PLATE_BADGE_TEXT_COLOR}
-                  className="pointer-events-none select-none"
-                >
-                  {plateBadge.label}
-                </text>
-              </g>
-            )}
-
-            {/* Intestazione: CABINA (sotto la targa). Il corpo è la costante
-                condivisa `CABINA_CAPTION_FONT_SIZE`: è la quota bassa della
-                gerarchia su cui è calcolata la posizione della targa. */}
-            <text
-              id="canvas-cabina-caption"
-              x={vehicle.width / 2}
-              y={CABINA_CAPTION_BASELINE_CM}
-              textAnchor="middle"
-              fontSize={CABINA_CAPTION_FONT_SIZE}
-              className="font-bold fill-slate-700 tracking-wider"
-            >
-              ▲ CABINA ▲
-            </text>
-
-            {/* Quota larghezza utile */}
-            <text
-              x={vehicle.width / 2}
-              y={WIDTH_QUOTA_BASELINE_CM}
-              textAnchor="middle"
-              className="text-[11px] font-mono fill-slate-500"
-            >
-              {vehicle.width} cm
-            </text>
-
-            {/* Didascalia: PORTE POSTERIORI */}
-            <text
-              x={vehicle.width / 2}
-              y={vehicle.length + 28}
-              textAnchor="middle"
-              className="text-[14px] font-bold fill-slate-700 tracking-wider"
-            >
-              PORTE POSTERIORI
-            </text>
-
-            {/* Rendering dei Colli Stivati — coordinate = cm reali del pianale */}
-            {items.map((item) => {
-              const isSelected = selectedIdSet.has(item.id);
-              // Allarme: collisione con altri colli OPPURE sforamento della
-              // sagoma utile (es. accodamento oltre le porte posteriori).
-              const alert = hasCollision(item, items) || isOutOfBounds(item, vehicle);
-
-              // Priorità: allarme (rosso) > selezione (blu) > bordo del collo.
-              // Il ROSSO è riservato alle sole condizioni di allarme: il bordo di
-              // catalogo è sempre il grigio antracite uniforme.
-              // Doppio contorno quando coesistono, così i due stati restano distinguibili.
-              const outerStroke = alert
-                ? ALERT_COLOR
-                : isSelected
-                  ? SELECTION_COLOR
-                  : item.borderColor;
-              const outerStrokeWidth = alert ? 2 : isSelected ? 3 : 1.5;
-
-              return (
+            {/* UN GRUPPO PER CIASCUN MEZZO: il pianale, la cabina, le porte, le
+                tacche metriche, i colli e le note vivono nelle coordinate LOCALI
+                  dello stallo; è questa traslazione ad affiancarli nella scena. */}
+              {bayViews.map((view) => (
                 <g
-                  key={item.id}
-                  data-canvas-item={item.code}
-                  data-item-id={item.id}
-                  transform={`translate(${item.x}, ${item.y})`}
-                  onPointerDown={(e) => handlePointerDown(item, e)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="cursor-move transition-shadow"
+                  key={view.bay.id}
+                  data-canvas-bay={view.bay.id}
+                  transform={`translate(${view.offset}, 0)`}
                 >
+                  {/* Corpo del semirimorchio: oggetto vettoriale, nessun clipping ai lati */}
                   <rect
-                    width={item.width}
-                    height={item.length}
-                    fill={item.color}
-                    stroke={outerStroke}
-                    strokeWidth={outerStrokeWidth}
-                    rx={2}
-                    className={isSelected ? 'filter drop-shadow-lg' : ''}
+                    x={0}
+                    y={0}
+                    width={view.bay.vehicle.width}
+                    height={view.bay.vehicle.length}
+                    rx={4}
+                    fill="white"
+                    filter="url(#truck-shadow)"
                   />
-                  {alert && isSelected && (
+
+              {/* Parete frontale Cabina */}
+              <line
+                x1={0}
+                y1={0}
+                x2={view.bay.vehicle.width}
+                y2={0}
+                stroke="#0F172A"
+                strokeWidth="4"
+              />
+
+              {/* Spalla Laterale Sinistra */}
+              <line
+                x1={0}
+                y1={0}
+                x2={0}
+                y2={view.bay.vehicle.length}
+                stroke="#0F172A"
+                strokeWidth="3"
+              />
+
+              {/* Spalla Laterale Destra */}
+              <line
+                x1={view.bay.vehicle.width}
+                y1={0}
+                x2={view.bay.vehicle.width}
+                y2={view.bay.vehicle.length}
+                stroke="#0F172A"
+                strokeWidth="3"
+              />
+
+              {/* Righelli metrici di fondo (linee ogni metro) */}
+              {view.meterMarkers.map((yVal) => (
+                <g key={yVal}>
+                  <line
+                    x1={0}
+                    y1={yVal}
+                    x2={view.bay.vehicle.width}
+                    y2={yVal}
+                    stroke="#E2E8F0"
+                    strokeDasharray="4 4"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={-8}
+                    y={yVal + 4}
+                    textAnchor="end"
+                    className="text-[10px] fill-slate-400 font-mono"
+                  >
+                    {(yVal / 100).toFixed(0)}m
+                  </text>
+                </g>
+              ))}
+
+              {/* Quota nominale 13,20 m: linea netta attraverso il pianale + dicitura
+                  nel righello di sinistra. Presente solo sui mezzi da 13,20 m in su. */}
+              {view.showsNominalQuota && (
+                <g>
+                  <line
+                    x1={0}
+                    y1={NOMINAL_QUOTA_CM}
+                    x2={view.bay.vehicle.width}
+                    y2={NOMINAL_QUOTA_CM}
+                    stroke={NOMINAL_QUOTA_COLOR}
+                    strokeDasharray="6 3"
+                    strokeWidth="1.5"
+                  />
+                  <text
+                    x={-8}
+                    y={NOMINAL_QUOTA_CM + 4}
+                    textAnchor="end"
+                    className="text-[10px] font-bold fill-slate-600 font-mono"
+                  >
+                    13.20m
+                  </text>
+                </g>
+              )}
+
+              {/* Contatore dinamico LDM (metri lineari occupati), dalla funzione
+                  condivisa `calculateLdmMetrics` con la Regola della Corsia di
+                  Parete.
+                  - Carico simmetrico: singolo indicatore a sinistra, linea guida
+                    continua alla Y massima, badge scuro `#1E293B`.
+                  - Carico asimmetrico: due indicatori tratteggiati, ciascuno sulla
+                    propria metà pianale; il lato più carico ha il badge scuro
+                    primario, quello meno carico lo slate intermedio `#475569`.
+                    Il badge destro vive FUORI dalla parete destra.
+                  - Densità `minimal`: nessuna linea e nessun badge (disegno pulito). */}
+              {view.showsLdmIndicator && view.ldmIsSymmetric && (
+                <g>
+                  <line
+                    x1={0}
+                    y1={view.ldm.maxOccupiedY}
+                    x2={view.bay.vehicle.width}
+                    y2={view.ldm.maxOccupiedY}
+                    stroke={LDM_GUIDE_COLOR}
+                    strokeWidth="1"
+                  />
+                  <rect
+                    x={LDM_BADGE_LEFT_X}
+                    y={view.ldm.maxOccupiedY - LDM_BADGE.height / 2}
+                    width={LDM_BADGE.width}
+                    height={LDM_BADGE.height}
+                    rx={3}
+                    fill={LDM_BADGE_COLOR}
+                  />
+                  <text
+                    x={LDM_BADGE_CENTER_X}
+                    y={view.ldm.maxOccupiedY + 3.5}
+                    textAnchor="middle"
+                    className="text-[10px] font-bold fill-white"
+                  >
+                    {formatLdmMeters(view.ldm.maxOccupiedY)} m ▶
+                  </text>
+                </g>
+              )}
+
+              {view.showsLdmIndicator && !view.ldmIsSymmetric && (
+                <g>
+                  {/* Indicatore SX: metà sinistra del pianale. */}
+                  <line
+                    x1={0}
+                    y1={view.ldm.leftY}
+                    x2={view.bay.vehicle.width / 2}
+                    y2={view.ldm.leftY}
+                    stroke={LDM_GUIDE_COLOR}
+                    strokeWidth="1"
+                    strokeDasharray={LDM_GUIDE_DASH}
+                  />
+                  {/* Chiusura a filo mezzeria: il tratteggio non deve lasciare la
+                      linea "sospesa" prima dell'asse di mezzeria. */}
+                  <line
+                    x1={Math.max(0, view.bay.vehicle.width / 2 - LDM_GUIDE_CLOSING_LENGTH)}
+                    y1={view.ldm.leftY}
+                    x2={view.bay.vehicle.width / 2}
+                    y2={view.ldm.leftY}
+                    stroke={LDM_GUIDE_COLOR}
+                    strokeWidth="1"
+                  />
+                  <rect
+                    x={LDM_BADGE_LEFT_X}
+                    y={view.ldm.leftY - LDM_BADGE.height / 2}
+                    width={LDM_BADGE.width}
+                    height={LDM_BADGE.height}
+                    rx={3}
+                    fill={view.leftLdmBadgeColor}
+                  />
+                  <text
+                    x={LDM_BADGE_CENTER_X}
+                    y={view.ldm.leftY + 3.5}
+                    textAnchor="middle"
+                    className="text-[10px] font-bold fill-white"
+                  >
+                    {formatLdmMeters(view.ldm.leftY)} m ▶
+                  </text>
+
+                  {/* Indicatore DX: metà destra del pianale, badge oltre la parete. */}
+                  <line
+                    x1={view.bay.vehicle.width / 2}
+                    y1={view.ldm.rightY}
+                    x2={view.bay.vehicle.width}
+                    y2={view.ldm.rightY}
+                    stroke={LDM_GUIDE_COLOR}
+                    strokeWidth="1"
+                    strokeDasharray={LDM_GUIDE_DASH}
+                  />
+                  {/* Chiusura a filo parete destra (stesso motivo del lato SX). */}
+                  <line
+                    x1={Math.max(view.bay.vehicle.width / 2, view.bay.vehicle.width - LDM_GUIDE_CLOSING_LENGTH)}
+                    y1={view.ldm.rightY}
+                    x2={view.bay.vehicle.width}
+                    y2={view.ldm.rightY}
+                    stroke={LDM_GUIDE_COLOR}
+                    strokeWidth="1"
+                  />
+                  <rect
+                    x={view.rightLdmBadgeLeftX}
+                    y={view.ldm.rightY - LDM_BADGE.height / 2}
+                    width={LDM_BADGE.width}
+                    height={LDM_BADGE.height}
+                    rx={3}
+                    fill={view.rightLdmBadgeColor}
+                  />
+                  <text
+                    x={view.rightLdmBadgeCenterX}
+                    y={view.ldm.rightY + 3.5}
+                    textAnchor="middle"
+                    className="text-[10px] font-bold fill-white"
+                  >
+                    ◀ {formatLdmMeters(view.ldm.rightY)} m
+                  </text>
+                </g>
+              )}
+
+              {/* Parete posteriore / PORTE */}
+              <line
+                x1={0}
+                y1={view.bay.vehicle.length}
+                x2={view.bay.vehicle.width}
+                y2={view.bay.vehicle.length}
+                stroke="#0F172A"
+                strokeWidth="3"
+                strokeDasharray="16 8"
+              />
+
+              {/* BADGE TARGA / IDENTIFICATIVO MEZZO: **solo testo** monospaziato
+                  tecnico, centrato sull'asse del pianale nella fascia di
+                  intestazione (corpo base 30 px), sopra la didascalia ▲ CABINA ▲.
+                  - **Silente a riposo:** con targa vuota il blocco non esiste
+                    affatto (nessun rettangolo, nessun tratteggio, nessun
+                    segnaposto): l'area sopra la Cabina è pulita e trasparente.
+                  - **Zero bordo:** nessun contorno (`stroke="none"`), solo testo.
+                  - **Gerarchia:** corpo base 30 px, il doppio dei 15 px di
+                    `▲ CABINA ▲`, ridotto solo per le targhe molto lunghe. La
+                    fascia di scrittura può sforare di 50 cm per lato oltre le
+                    sponde del mezzo (`view.bay.vehicle.width + 100` cm).
+                  Il click riporta il focus sul campo di testo della sidebar, così
+                  il badge funziona da secondo aggancio della stessa informazione. */}
+              {view.plateBadge && (
+                <g
+                  id="canvas-plate-badge"
+                  className="cursor-pointer"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    // Il click è del badge: non deve azzerare la selezione dei colli.
+                    e.stopPropagation();
+                    document.getElementById(PLATE_INPUT_ID)?.focus();
+                  }}
+                >
+                  <text
+                    x={view.plateBadge.centerX}
+                    y={view.plateBadge.centerY}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontFamily={PLATE_BADGE_FONT_FAMILY}
+                    fontSize={view.plateBadge.fontSize}
+                    fontWeight="900"
+                    letterSpacing={`${PLATE_BADGE_LETTER_SPACING_EM}em`}
+                    stroke="none"
+                    strokeWidth={0}
+                    fill={PLATE_BADGE_TEXT_COLOR}
+                    className="pointer-events-none select-none"
+                  >
+                    {view.plateBadge.label}
+                  </text>
+                </g>
+              )}
+
+              {/* Intestazione: CABINA (sotto la targa). Il corpo è la costante
+                  condivisa `CABINA_CAPTION_FONT_SIZE`: è la quota bassa della
+                  gerarchia su cui è calcolata la posizione della targa. */}
+              <text
+                id="canvas-cabina-caption"
+                x={view.bay.vehicle.width / 2}
+                y={CABINA_CAPTION_BASELINE_CM}
+                textAnchor="middle"
+                fontSize={CABINA_CAPTION_FONT_SIZE}
+                className="font-bold fill-slate-700 tracking-wider"
+              >
+                ▲ CABINA ▲
+              </text>
+
+              {/* Quota larghezza utile */}
+              <text
+                x={view.bay.vehicle.width / 2}
+                y={WIDTH_QUOTA_BASELINE_CM}
+                textAnchor="middle"
+                className="text-[11px] font-mono fill-slate-500"
+              >
+                {view.bay.vehicle.width} cm
+              </text>
+
+              {/* Didascalia: PORTE POSTERIORI */}
+              <text
+                x={view.bay.vehicle.width / 2}
+                y={view.bay.vehicle.length + 28}
+                textAnchor="middle"
+                className="text-[14px] font-bold fill-slate-700 tracking-wider"
+              >
+                PORTE POSTERIORI
+              </text>
+
+              {/* Rendering dei Colli Stivati — coordinate = cm reali del pianale */}
+              {view.items.map((item) => {
+                const isSelected = selectedIdSet.has(item.id);
+                // Allarme: collisione con altri colli OPPURE sforamento della
+                // sagoma utile (es. accodamento oltre le porte posteriori).
+                const alert = hasCollision(item, view.items) || isOutOfBounds(item, view.bay.vehicle);
+
+                // Priorità: allarme (rosso) > selezione (blu) > bordo del collo.
+                // Il ROSSO è riservato alle sole condizioni di allarme: il bordo di
+                // catalogo è sempre il grigio antracite uniforme.
+                // Doppio contorno quando coesistono, così i due stati restano distinguibili.
+                const outerStroke = alert
+                  ? ALERT_COLOR
+                  : isSelected
+                    ? SELECTION_COLOR
+                    : item.borderColor;
+                const outerStrokeWidth = alert ? 2 : isSelected ? 3 : 1.5;
+
+                return (
+                  <g
+                    key={item.id}
+                    data-canvas-item={item.code}
+                    data-item-id={item.id}
+                    transform={`translate(${item.x}, ${item.y})`}
+                    onPointerDown={(e) => handlePointerDown(item, view.bay, e)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="cursor-move transition-shadow"
+                  >
                     <rect
-                      x={2.5}
-                      y={2.5}
-                      width={Math.max(0, item.width - 5)}
-                      height={Math.max(0, item.length - 5)}
+                      width={item.width}
+                      height={item.length}
+                      fill={item.color}
+                      stroke={outerStroke}
+                      strokeWidth={outerStrokeWidth}
+                      rx={2}
+                      className={isSelected ? 'filter drop-shadow-lg' : ''}
+                    />
+                    {alert && isSelected && (
+                      <rect
+                        x={2.5}
+                        y={2.5}
+                        width={Math.max(0, item.width - 5)}
+                        height={Math.max(0, item.length - 5)}
+                        fill="none"
+                        stroke={SELECTION_COLOR}
+                        strokeWidth={1.5}
+                        rx={1.5}
+                        pointerEvents="none"
+                      />
+                    )}
+                    {/* Etichette interne: dipendono dalla densità scelta nell'HUD.
+                        `minimal` non stampa alcun <text> (solo blocco colorato).
+                        Il gruppo è ritagliato dal clipPath del collo: il testo non
+                        può fisicamente sbordare sui colli adiacenti. */}
+                    <g clipPath={`url(#${clipIdForItem(item.id)})`}>
+                      {renderItemLabels(item)}
+                    </g>
+                  </g>
+                );
+              })}
+
+                  {/* Involucro del gruppo selezionato (solo con selezione multipla):
+                      indica visivamente che i colli si sposteranno assieme. Vive nel
+                      solo stallo che possiede la selezione. */}
+                  {view.items.some((item) => selectedIdSet.has(item.id)) && groupBounds && (
+                    <rect
+                      x={groupBounds.x - 6}
+                      y={groupBounds.y - 6}
+                      width={groupBounds.right - groupBounds.x + 12}
+                      height={groupBounds.bottom - groupBounds.y + 12}
                       fill="none"
                       stroke={SELECTION_COLOR}
                       strokeWidth={1.5}
-                      rx={1.5}
+                      strokeDasharray="10 5"
+                      rx={3}
+                      opacity={0.75}
                       pointerEvents="none"
                     />
-                  )}
-                  {/* Etichette interne: dipendono dalla densità scelta nell'HUD.
-                      `minimal` non stampa alcun <text> (solo blocco colorato).
-                      Il gruppo è ritagliato dal clipPath del collo: il testo non
-                      può fisicamente sbordare sui colli adiacenti. */}
-                  <g clipPath={`url(#${clipIdForItem(item.id)})`}>
-                    {renderItemLabels(item)}
-                  </g>
-                </g>
-              );
-            })}
+                )}
 
-            {/* Involucro del gruppo selezionato (solo con selezione multipla):
-                indica visivamente che i colli si sposteranno assieme. */}
-            {groupBounds && (
-              <rect
-                x={groupBounds.x - 6}
-                y={groupBounds.y - 6}
-                width={groupBounds.right - groupBounds.x + 12}
-                height={groupBounds.bottom - groupBounds.y + 12}
-                fill="none"
-                stroke={SELECTION_COLOR}
-                strokeWidth={1.5}
-                strokeDasharray="10 5"
-                rx={3}
-                opacity={0.75}
-                pointerEvents="none"
-              />
-            )}
+                {/* NOTE LATERALI 2D LIBERE dello stallo: ogni card vive alle proprie
+                    coordinate (x, y) in cm reali — quindi può stare a destra del
+                    camion, a sinistra (`x < 0`), lungo il pianale o in coda.
+                    Cliccando una nota la si seleziona (e si deselezionano i colli);
+                    trascinandola con il puntatore si sposta liberamente in X e Y,
+                    mentre la maniglia nell'angolo basso-destro ne ridimensiona il
+                    box. */}
+                {view.noteLayouts.map(
+                  ({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
+                    const isSelected = selectedNoteIdSet.has(note.id);
 
-            {/* NOTE LATERALI 2D LIBERE: ogni card vive alle proprie coordinate
-                (x, y) in cm reali, quindi può stare a destra del camion, a
-                sinistra (`x < 0`), lungo il pianale o in coda. Cliccando una nota
-                la si seleziona (e si deselezionano i colli); trascinandola con il
-                puntatore si sposta liberamente in X e Y, mentre la maniglia
-                nell'angolo basso-destro ne ridimensiona il box. */}
-            {noteLayouts.map(({ note, height, lines, fontSize, firstBaselineCm, lineHeightCm, textHeight }) => {
-              const isSelected = selectedNoteIdSet.has(note.id);
+                    return (
+                      <g
+                        key={note.id}
+                        data-canvas-note={note.id}
+                        transform={`translate(${note.x}, ${note.y})`}
+                        onPointerDown={(e) =>
+                          handleNotePointerDown(note, view.offset, view.bay.vehicle.width, e)
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        className="cursor-move"
+                      >
+                        {/* ZERO BORDI A RIPOSO: la card è puro testo fluttuante; solo la
+                            nota selezionata mostra il contorno blu CAD di evidenziazione. */}
+                        <rect
+                          width={note.width}
+                          height={height}
+                          rx={4}
+                          fill={note.color}
+                          stroke={isSelected ? SELECTION_COLOR : 'none'}
+                          strokeWidth={isSelected ? 2 : 0}
+                          filter="url(#side-note-shadow)"
+                        />
 
-              return (
-                <g
-                  key={note.id}
-                  data-canvas-note={note.id}
-                  transform={`translate(${note.x}, ${note.y})`}
-                  onPointerDown={(e) => handleNotePointerDown(note, e)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="cursor-move"
-                >
-                  {/* ZERO BORDI A RIPOSO: la card è puro testo fluttuante; solo la
-                      nota selezionata mostra il contorno blu CAD di evidenziazione. */}
-                  <rect
-                    width={note.width}
-                    height={height}
-                    rx={4}
-                    fill={note.color}
-                    stroke={isSelected ? SELECTION_COLOR : 'none'}
-                    strokeWidth={isSelected ? 2 : 0}
-                    filter="url(#side-note-shadow)"
-                  />
-
-                  {/* UNICO TESTO DELLA NOTA: coordinate RELATIVE all'origine del
-                      box (il gruppo è già traslato in `note.x, note.y`).
-                      `x = 10` per il testo e per ogni `tspan`, così l'intero
-                      contenuto resta rigorosamente dentro il rettangolo. Il
-                      clip aggiuntivo vale solo per un box più basso del testo. */}
-                  <g
-                    clipPath={
-                      textHeight > height ? `url(#${clipIdForNote(note.id)})` : undefined
-                    }
-                  >
-                    <text
-                      x={NOTE_PADDING_CM}
-                      fontSize={fontSize}
-                      className="fill-slate-700 pointer-events-none select-none"
-                    >
-                      {lines.map((line, index) => (
-                        <tspan
-                          key={index}
-                          x={NOTE_PADDING_CM}
-                          y={firstBaselineCm + index * lineHeightCm}
+                        {/* UNICO TESTO DELLA NOTA: coordinate RELATIVE all'origine del
+                            box (il gruppo è già traslato in `note.x, note.y`).
+                            `x = 10` per il testo e per ogni `tspan`, così l'intero
+                            contenuto resta rigorosamente dentro il rettangolo. Il
+                            clip aggiuntivo vale solo per un box più basso del testo. */}
+                        <g
+                          clipPath={
+                            textHeight > height ? `url(#${clipIdForNote(note.id)})` : undefined
+                          }
                         >
-                          {line}
-                        </tspan>
-                      ))}
-                    </text>
-                  </g>
+                          <text
+                            x={NOTE_PADDING_CM}
+                            fontSize={fontSize}
+                            className="fill-slate-700 pointer-events-none select-none"
+                          >
+                            {lines.map((line, index) => (
+                              <tspan
+                                key={index}
+                                x={NOTE_PADDING_CM}
+                                y={firstBaselineCm + index * lineHeightCm}
+                              >
+                                {line}
+                              </tspan>
+                            ))}
+                          </text>
+                        </g>
 
-                  {/* MANIGLIA DI RIDIMENSIONAMENTO (angolo basso-destro):
-                      visibile solo sulla nota selezionata. Il gesto è catturato
-                      qui e non propaga né alla card (drag Y) né al canvas (pan). */}
-                  {isSelected && (
-                    <rect
-                      x={note.width - NOTE_RESIZE_HANDLE_SIZE_CM}
-                      y={height - NOTE_RESIZE_HANDLE_SIZE_CM}
-                      width={NOTE_RESIZE_HANDLE_SIZE_CM}
-                      height={NOTE_RESIZE_HANDLE_SIZE_CM}
-                      rx={1.5}
-                      fill={NOTE_RESIZE_HANDLE_COLOR}
-                      className="cursor-se-resize"
-                      onPointerDown={(e) => handleNoteResizePointerDown(note, height, e)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  )}
-                </g>
-              );
-            })}
+                        {/* MANIGLIA DI RIDIMENSIONAMENTO (angolo basso-destro):
+                            visibile solo sulla nota selezionata. Il gesto è catturato
+                            qui e non propaga né alla card (drag Y) né al canvas (pan). */}
+                        {isSelected && (
+                          <rect
+                            x={note.width - NOTE_RESIZE_HANDLE_SIZE_CM}
+                            y={height - NOTE_RESIZE_HANDLE_SIZE_CM}
+                            width={NOTE_RESIZE_HANDLE_SIZE_CM}
+                            height={NOTE_RESIZE_HANDLE_SIZE_CM}
+                            rx={1.5}
+                            fill={NOTE_RESIZE_HANDLE_COLOR}
+                            className="cursor-se-resize"
+                            onPointerDown={(e) =>
+                              handleNoteResizePointerDown(
+                                note,
+                                height,
+                                view.offset,
+                                view.bay.vehicle.width,
+                                e
+                              )
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        )}
+                      </g>
+                    );
+                  }
+                )}
+
+                {/* Intestazione dello stallo: pillola a riga singola con il nome
+                    del mezzo, il badge `ATTIVO` e il disco di eliminazione. */}
+                {renderBayHeader(view)}
+              </g>
+            ))}
           </g>
 
           {/* Rettangolo di selezione (lasso): disegnato in px schermo, sopra il

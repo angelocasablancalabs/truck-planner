@@ -1,15 +1,21 @@
 {
-  "version": 1,
+  "version": 2,
   "app": "truck-planner",
-  "timestamp": "2026-10-14T09:27:08.357Z",
-  "vehicle": {
-    "id": "bilico_cc",
-    "name": "Bilico frigo Fiori (2,50 × 13,28 m)",
-    "width": 250,
-    "length": 1328
-  },
-  "plate": "",
-  "items": [],
-  "notes": [],
+  "timestamp": "2026-10-14T15:28:56.739Z",
+  "bays": [
+    {
+      "id": "bay-1",
+      "vehicle": {
+        "id": "bilico_cc",
+        "name": "Bilico CC Fiori (2,50 × 13,28 m)",
+        "width": 250,
+        "length": 1328
+      },
+      "plate": "",
+      "items": [],
+      "notes": []
+    }
+  ],
+  "activeBayId": "bay-1",
   "labelDensity": "all"
 }
