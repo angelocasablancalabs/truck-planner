@@ -65,8 +65,9 @@ export const EXPORT_PIXEL_RATIO = 2;
  * di superare i tetti di canvas dei browser (soprattutto Safari/iOS) quando il
  * rapporto d'aspetto del mezzo è molto allungato (bilico da 13,60 m).
  *
- * È condivisa con l'esportazione PDF diretta (`utils/pdfExport.ts`), che
- * rasterizza lo stesso snapshot in JPEG e deve rispettare lo stesso tetto.
+ * Limite prudenziale usato dalla sola esportazione immagine: da quando la
+ * stampa passa dal motore nativo del browser (`window.print()`, PDF vettoriale),
+ * `MAX_CANVAS_AREA` non è più condiviso con alcun generatore PDF raster.
  */
 export const MAX_CANVAS_AREA = 64_000_000;
 

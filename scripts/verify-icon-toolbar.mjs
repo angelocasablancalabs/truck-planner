@@ -1,29 +1,43 @@
 /* -------------------------------------------------------------------------- *
- *  VERIFICA HEADLESS — TOOLBAR A SEI ICONE & PDF DIRETTO "SOLO GRAFICA"
+ *  VERIFICA HEADLESS — TOOLBAR A SEI ICONE & STAMPA VETTORIALE A MODALITÀ
  *
  *  Pilota Chrome reale via Chrome DevTools Protocol (zero dipendenze aggiunte)
- *  e verifica, end-to-end, la nuova plancia comandi:
+ *  e verifica, end-to-end, la plancia comandi nell'architettura attuale — quella
+ *  in cui il PDF **non** è più un raster JPEG composto a mano, ma il risultato
+ *  della stampa nativa del browser pilotata dall'attributo `data-print-mode`:
  *
  *    1. **Toolbar geometrica 2 × 3**: sei pulsanti a **sole icone** disposti su
  *       due righe da tre colonne uniformi (`grid-cols-3`, alto 36 px ciascuno),
  *       con il testo descrittivo confinato nel `title` (tooltip) e in uno
  *       `span.sr-only` — nessuna etichetta visibile;
- *    2. **Ordine dei comandi**: riga 1 = `Copia Immagine` · `PDF Solo Grafica` ·
- *       `Stampa Piano`; riga 2 = `Salva` · `Salva con nome` · `Apri Piano`;
+ *    2. **Ordine dei comandi**: riga 1 (File) = `Salva` · `Salva con nome` ·
+ *       `Apri Piano`; riga 2 (Output) = `Copia Immagine` · `Stampa Solo Grafica`
+ *       · `Stampa Scheda Completa`;
  *    3. **Badge `#active-file-badge`** sotto la seconda riga, acceso dal
  *       salvataggio;
- *    4. **PDF diretto**: il modulo `src/utils/pdfExport.ts` produce un PDF 1.4
- *       strutturalmente valido — header, tavola `xref` con offset reali,
- *       `/Length` dei flussi esatti, immagine JPEG `/DCTDecode` con le stesse
- *       proporzioni dello snapshot pulito di `Copia Immagine` (quindi **non** la
- *       scheda A4 formale) — e lo scarica come `piano-<TARGA>-<data>.pdf`;
- *    5. **"Salva con nome"**: con un file già agganciato forza comunque il
+ *    4. **Stampa a modalità**: il click su `#btn-print-clean` imposta
+ *       `data-print-mode="clean"` su `<html>`, chiama `window.print()` e lo
+ *       **rimuove** all'evento `afterprint` (stessa cosa per
+ *       `#btn-print-report` → `full`); le regole `@media print` della modalità
+ *       `clean` esistono davvero nei fogli di stile (`display: none !important`
+ *       per intestazione e tabella) e, sotto media di stampa emulato, nascondono
+ *       intestazione, tabella e Pagina 2 lasciando il disegno a piena pagina;
+ *    5. **PDF vettoriale leggero**: il motore di stampa di Chrome (`printToPDF`)
+ *       produce, con la modalità `clean` attiva, un PDF **senza alcuna immagine
+ *       raster incorporata** e di peso contenuto, salvato come evidenza in
+ *       `shots/` per l'ispezione manuale dell'operatore;
+ *    6. **"Salva con nome"**: con un file già agganciato forza comunque il
  *       selettore nativo, crea una **nuova copia** e sposta lì il file attivo;
  *       se l'operatore annulla non succede nulla e non compare alcun avviso.
  *
  *  Nota di metodo: Chrome headless espone la File System Access API ma non può
  *  mostrare i dialoghi nativi, quindi i selettori sono sostituiti da doppi
- *  controllabili installati nella pagina (`Object.defineProperty`).
+ *  controllabili installati nella pagina (`Object.defineProperty`). Allo stesso
+ *  modo `window.print()` — che in headless non ha né anteprima né dialogo — viene
+ *  sostituito da una spia contabile: il ciclo di vita dell'attributo è così
+ *  deterministico, mentre la **resa reale** del foglio di stampa è verificata a
+ *  parte con `Emulation.setEmulatedMedia({ media: 'print' })` (stili calcolati e
+ *  geometria) e con `Page.printToPDF` (artefatto vettoriale vero).
  *
  *  Uso:  node scripts/verify-icon-toolbar.mjs [url]
  *  (default `http://localhost:5173/truck-planner/`)
@@ -31,43 +45,42 @@
  * -------------------------------------------------------------------------- */
 
 const DEV_URL = process.argv[2] || 'http://localhost:5173/truck-planner/';
-/** Percorso del modulo PDF sul dev server (prefissato con la `base` di Vite). */
-const MODULE_URL = '/truck-planner/src/utils/pdfExport.ts';
+/** Porta del server DevTools del Chrome headless pilotato dallo script. */
 const DEBUG_PORT = Number(process.env.CHROME_DEBUG_PORT || 9341);
 const WATCHDOG_MS = 45000;
 const CHROME_PATH =
   process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+/**
+ * Evidenza della stampa "Solo Grafica": il PDF **vettoriale** prodotto dal motore
+ * di stampa di Chrome con `data-print-mode="clean"` attivo. Sostituisce il vecchio
+ * `shots/pdf-solo-grafica.pdf`, che era il raster JPEG del generatore rimosso.
+ */
+const PRINT_EVIDENCE = ['shots', 'pdf-vettoriale-solo-grafica.pdf'];
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 /**
- * Estensione del **visualizzatore PDF interno** di Chrome: quando compare fra i
- * target della pagina, il documento è stato riconosciuto come `application/pdf`
- * e affidato al motore PDF del browser (prova di leggibilità reale del file).
+ * I sei comandi attesi, **nell'ordine visivo** (riga per riga, sinistra →
+ * destra): prima la riga 1 di gestione file, poi la riga 2 di output, così le
+ * tre colonne di ciascuna riga si possono confrontare per geometria.
  */
-const CHROME_PDF_VIEWER = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai';
-
-/** I sei comandi attesi, nell'ordine visivo (riga per riga, sinistra → destra). */
 const COMMANDS = [
-  { id: 'btn-copy-image', label: 'Copia Immagine', tooltip: 'appunti' },
-  { id: 'btn-export-pdf', label: 'PDF Solo Grafica', tooltip: 'PDF' },
-  { id: 'btn-print-report', label: 'Stampa Piano', tooltip: 'Stampa' },
   { id: 'btn-save-project', label: 'Salva', tooltip: 'Salva' },
-  { id: 'btn-save-as-project', label: 'Salva con nome', tooltip: 'Salva con nome' },
-  { id: 'btn-open-project', label: 'Apri Piano', tooltip: 'Apri' },
+  { id: 'btn-save-as-project', label: 'Salva con nome', tooltip: 'nuova copia' },
+  { id: 'btn-open-project', label: 'Apri Piano', tooltip: '.json' },
+  { id: 'btn-copy-image', label: 'Copia Immagine', tooltip: 'appunti' },
+  { id: 'btn-print-clean', label: 'Stampa Solo Grafica', tooltip: 'solo grafica' },
+  { id: 'btn-print-report', label: 'Stampa Scheda Completa', tooltip: 'scheda tecnica' },
 ];
 
-/** A4 verticale in punti e margine di 10 mm usati dal generatore PDF. */
-const A4_WIDTH_PT = 595.28;
-const A4_HEIGHT_PT = 841.89;
-const A4_MARGIN_PT = 28.35;
-/** Data ISO del giorno: entra nel nome dei file scaricati. */
-const TODAY = new Date().toISOString().slice(0, 10);
-/** Targa usata per il nome del PDF scaricato. */
+/**
+ * Targa digitata prima delle verifiche di stampa: finisce nel badge sopra la
+ * Cabina della scheda A4 e del disegno "solo grafica", quindi prova che il
+ * foglio stampato porta davvero il mezzo identificato (e non una sagoma vuota).
+ */
 const PLATE = 'XA111NJ';
 /** Nome del file agganciato dal primo salvataggio (selettore nativo finto). */
 const FIRST_FILE_NAME = 'piano-piazzale.json';
@@ -283,110 +296,130 @@ const TOOLBAR_SNAPSHOT = `
   };
 `;
 
-/* --- Validazione byte-per-byte del PDF prodotto --------------------------- */
+/* --- Stampa a modalità: regole `@media print` e resa del foglio ----------- */
 
 /**
- * Convalida la struttura del PDF scaricato: header, tavola `xref` con offset
- * reali (ogni voce deve puntare al proprio `N 0 obj`), `/Length` dichiarati
- * uguali ai byte effettivamente presenti nei due flussi, immagine JPEG integra
- * (`SOI`/`EOI`) e impaginazione A4 centrata dentro i margini di 10 mm.
+ * Raccoglie dai fogli di stile **tutte** le regole che citano `data-print-mode`,
+ * con le condizioni degli at-rule che le contengono (in dev Vite inietta il CSS
+ * di `src/index.css` in un `<style>` same-origin, quindi `cssRules` è leggibile).
+ *
+ * La ricorsione non guarda il tipo dell'at-rule ma la sola presenza di
+ * `cssRules`: così funziona anche se Tailwind v4 avvolge il foglio in `@layer`
+ * o `@supports`, e la condizione `print` viene cercata lungo tutta la catena.
  */
-const inspectPdf = (bytes) => {
-  const text = bytes.toString('latin1');
-  const out = {
-    header: text.slice(0, 8),
-    eof: text.trimEnd().endsWith('%%EOF'),
-    xrefOffset: null,
-    xrefHeader: null,
-    xrefOk: false,
-    objects: [],
-    mediaBox: (text.match(/\/MediaBox \[([^\]]+)\]/) || [])[1] || null,
-    filters: [...text.matchAll(/\/Filter \/(\w+)/g)].map((m) => m[1]),
-    fontResources: /\/Font/.test(text) || /\/Type \/Font/.test(text),
-    imageWidth: Number((text.match(/\/Subtype \/Image[\s\S]*?\/Width (\d+)/) || [])[1]),
-    imageHeight: Number((text.match(/\/Subtype \/Image[\s\S]*?\/Height (\d+)/) || [])[1]),
-    imageStreamOk: false,
-    contentStreamOk: false,
-    cm: null,
-  };
-
-  const startxrefAt = text.lastIndexOf('startxref');
-  if (startxrefAt >= 0) {
-    out.xrefOffset = Number(text.slice(startxrefAt + 'startxref'.length).trim().split('\n')[0].trim());
-    out.xrefHeader = text.slice(out.xrefOffset, out.xrefOffset + 16);
-  }
-
-  // Tavola xref: `xref`, riga `0 N`, poi una voce da 20 byte per oggetto.
-  const size = Number((out.xrefHeader || '').match(/xref\n0 (\d+)/)?.[1]);
-  if (size > 1) {
-    const headerLength = `xref\n0 ${size}\n`.length;
-    const entries = [];
-    for (let i = 1; i < size; i += 1) {
-      const at = out.xrefOffset + headerLength + i * 20;
-      const offset = Number(text.slice(at, at + 10));
-      entries.push({ object: i, offset, pointsAt: text.slice(offset, offset + 12) });
+/**
+ * Raccoglie dai fogli di stile **tutte** le regole che citano `data-print-mode`,
+ * con le condizioni degli at-rule che le contengono (in dev Vite inietta il CSS
+ * di `src/index.css` in un `<style>` same-origin, quindi `cssRules` è leggibile).
+ *
+ * La discesa avviene sugli at-rule (`@media`, `@layer`, `@supports`) e **non**
+ * sulle regole di stile: da quando esiste il CSS nesting anche un `CSSStyleRule`
+ * espone `cssRules` (vuoto se non annidato), quindi la discriminante corretta è
+ * l'assenza di `selectorText`, non la presenza di `cssRules`.
+ */
+const CLEAN_PRINT_RULES = `
+  const found = [];
+  let sheets = 0;
+  let visited = 0;
+  let blocked = 0;
+  const walk = (rules, conditions) => {
+    for (const rule of Array.from(rules)) {
+      visited += 1;
+      if (rule.selectorText) {
+        if (String(rule.selectorText).includes('data-print-mode')) {
+          found.push({
+            // Le virgolette dell'attributo possono sparire nella minificazione.
+            selectors: String(rule.selectorText).replace(/"/g, ''),
+            media: conditions.join(' && '),
+            cssText: rule.style ? rule.style.cssText : '',
+          });
+        }
+        continue;
+      }
+      if (rule.cssRules) {
+        const own = rule.conditionText || (rule.media && rule.media.mediaText) || rule.name || '';
+        walk(rule.cssRules, own ? conditions.concat(own) : conditions);
+      }
     }
-    out.objects = entries;
-    out.xrefOk = entries.every((e) => e.pointsAt.startsWith(`${e.object} 0 obj`));
+  };
+  for (const sheet of Array.from(document.styleSheets)) {
+    sheets += 1;
+    let rules = null;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      // Foglio di origine diversa: non ispezionabile, viene solo contato.
+      blocked += 1;
+      rules = null;
+    }
+    if (rules) walk(rules, []);
   }
+  return { found, sheets, visited, blocked };
+`;
 
-  // Flusso immagine (oggetto 5): `/Length` dichiarato = byte reali.
-  const imageObj = text.indexOf('5 0 obj');
-  if (imageObj >= 0) {
-    const declared = Number(text.slice(imageObj, imageObj + 400).match(/\/Length (\d+)/)?.[1]);
-    const streamStart = bytes.indexOf(Buffer.from('stream\n'), imageObj) + 'stream\n'.length;
-    const streamEnd = bytes.indexOf(Buffer.from('\nendstream'), streamStart);
-    const stream = bytes.subarray(streamStart, streamEnd);
-    out.imageStreamOk =
-      stream.length === declared &&
-      stream[0] === 0xff &&
-      stream[1] === 0xd8 &&
-      stream[stream.length - 2] === 0xff &&
-      stream[stream.length - 1] === 0xd9;
-    out.imageStreamLength = stream.length;
-    out.imageDeclaredLength = declared;
-  }
+/**
+ * Fotografa la **resa reale** del foglio di stampa sotto il media corrente:
+ * `display` di interfaccia e scheda, e geometria di pagina e disegno. Va letto
+ * con `Emulation.setEmulatedMedia({ media: 'print' })` attivo, perché le regole
+ * della modalità vivono tutte dentro `@media print`.
+ */
+const PRINT_LAYOUT_PROBE = `
+  const snap = (selector) => {
+    const el = document.querySelector(selector);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return {
+      display: cs.display,
+      gap: cs.gap,
+      justifyContent: cs.justifyContent,
+      alignItems: cs.alignItems,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  };
+  return {
+    mode: document.documentElement.getAttribute('data-print-mode'),
+    screenApp: snap('#screen-app'),
+    report: snap('#print-report'),
+    page: snap('#print-report .print-page-first'),
+    header: snap('#print-report header'),
+    table: snap('#print-report .print-table'),
+    drawing: snap('#print-report .print-drawing'),
+  };
+`;
 
-  // Flusso di contenuto (oggetto 4): `/Length` dichiarato = byte reali.
-  const contentObj = text.indexOf('4 0 obj');
-  if (contentObj >= 0) {
-    const declared = Number(text.slice(contentObj, contentObj + 200).match(/\/Length (\d+)/)?.[1]);
-    const streamStart = bytes.indexOf(Buffer.from('stream\n'), contentObj) + 'stream\n'.length;
-    const streamEnd = bytes.indexOf(Buffer.from('\nendstream'), streamStart);
-    const stream = bytes.subarray(streamStart, streamEnd);
-    out.contentStreamOk = stream.length === declared;
-    const cm = stream.toString('latin1').match(
-      /q\n([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm\n\/Im1 Do\nQ/
-    );
-    if (cm) out.cm = { width: Number(cm[1]), height: Number(cm[2]), x: Number(cm[3]), y: Number(cm[4]) };
-  }
-
-  out.fitsMargins =
-    out.cm !== null &&
-    out.cm.width <= A4_WIDTH_PT - A4_MARGIN_PT * 2 + 0.51 &&
-    out.cm.height <= A4_HEIGHT_PT - A4_MARGIN_PT * 2 + 0.51 &&
-    out.cm.x >= A4_MARGIN_PT - 0.51 &&
-    out.cm.y >= A4_MARGIN_PT - 0.51 &&
-    Math.abs(out.cm.x - (A4_WIDTH_PT - out.cm.width) / 2) < 0.02 &&
-    Math.abs(out.cm.y - (A4_HEIGHT_PT - out.cm.height) / 2) < 0.02;
-
-  return out;
+/**
+ * `true` se nella regola c'è una dichiarazione (o un frammento di selettore):
+ * il confronto è case-insensitive e ignora gli spazi, così non dipende dalla
+ * formattazione con cui il browser riserializza il CSS.
+ */
+const ruleHas = (rule, needle) => {
+  const haystack = `${rule.selectors} ${rule.cssText}`.toLowerCase().replace(/\s+/g, ' ');
+  return haystack.includes(needle.toLowerCase().replace(/\s+/g, ' '));
 };
+
+/**
+ * `true` se il PDF è **puramente vettoriale**: nessuna immagine raster
+ * incorporata (né JPEG `/DCTDecode` né `XObject` immagine di altro tipo). È la
+ * prova che la stampa non passa più da uno snapshot rasterizzato.
+ */
+const isVectorOnlyPdf = (text) =>
+  !/\/Subtype\s*\/Image/.test(text) && !/DCTDecode/.test(text) && !/\/JPXDecode/.test(text);
 
 /* --- Script ----------------------------------------------------------------- */
 
 const main = async () => {
   const startedAt = Date.now();
 
-  // Cartella di download reale (fuori dal watcher Vite: `tmp/**`).
+  // Cartella di download reale (fuori dal watcher Vite: `tmp/**`): la stampa a
+  // modalità non scarica più alcun file, ma la si mantiene come rete di sicurezza
+  // per l'eventuale fallback di download classico di "Salva con nome", che non
+  // deve mai sporcare la cartella Download dell'operatore.
   const workDir = resolve('tmp', 'icon-toolbar-verify');
   const downloadDir = join(workDir, 'downloads');
   rmSync(workDir, { recursive: true, force: true });
   mkdirSync(downloadDir, { recursive: true });
-
-  /** File PDF davvero scaricati dal browser. */
-  const downloadedPdfs = () =>
-    existsSync(downloadDir) ? readdirSync(downloadDir).filter((f) => f.endsWith('.pdf')) : [];
 
   const profileDir = mkdtempSync(join(tmpdir(), 'icon-toolbar-profile-'));
   const chrome = spawn(
@@ -435,7 +468,7 @@ const main = async () => {
 
     await cdp.send('Page.navigate', { url: DEV_URL });
     await waitFor(
-      async () => cdp.eval(`return document.getElementById('btn-export-pdf') ? 1 : 0;`),
+      async () => cdp.eval(`return document.getElementById('btn-print-clean') ? 1 : 0;`),
       12000,
       'mount della toolbar'
     );
@@ -501,11 +534,11 @@ const main = async () => {
     );
 
     check(
-      'Toolbar: riga 1 (Output) sopra la riga 2 (File), con lo stesso passo orizzontale',
-      row2[0].y > row1[0].bottom &&
+      'Toolbar: riga 1 (File) sopra la riga 2 (Output), con lo stesso passo orizzontale',
+      row2[0].y >= row1[0].bottom &&
         row1[1].x - row1[0].x === row2[1].x - row2[0].x &&
         row1[0].x === row2[0].x,
-      `row1.y=${row1[0].y} … row2.y=${row2[0].y}, passo ${row1[1].x - row1[0].x}px`
+      `row1.y=${row1[0].y} (bottom ${row1[0].bottom}) … row2.y=${row2[0].y}, passo ${row1[1].x - row1[0].x}px`
     );
 
     check(
@@ -522,26 +555,14 @@ const main = async () => {
       toolbar.badge ? `presente: "${toolbar.badge.text}"` : 'assente'
     );
 
-    /* --- 2) Modulo PDF: API pubblica ------------------------------------- */
-    const moduleInfo = await cdp.eval(`
-      try {
-        const mod = await import(${JSON.stringify(MODULE_URL)});
-        return { available: true, isFunction: typeof mod.exportCleanPianoToPdf === 'function', exports: Object.keys(mod) };
-      } catch (error) {
-        return { available: false, message: String(error) };
-      }
-    `);
-    check(
-      'Modulo `src/utils/pdfExport.ts`: esporta `exportCleanPianoToPdf`',
-      moduleInfo.available === true && moduleInfo.isFunction === true,
-      moduleInfo.available ? moduleInfo.exports.join(', ') : moduleInfo.message
-    );
-    if (!moduleInfo.available) throw new Error('modulo PDF non importabile: verifiche interrotte');
-
-    /* --- 3) PDF diretto "solo grafica" ----------------------------------- */
+    /* --- 2) Stampa "Solo Grafica": ciclo di vita di `data-print-mode` ------ *
+     *  `window.print()` in headless non ha dialogo né anteprima e non emette
+     *  `afterprint`: viene quindi sostituito da una spia contabile, mentre la
+     *  resa reale del foglio è verificata più sotto con il media di stampa
+     *  emulato (§ 5) e con il PDF prodotto dal motore di stampa (§ 3). */
     const plateSet = await setTextInput(cdp, 'vehicle-plate-input', PLATE);
-    // Carico di prova non banale: due PLT INDU a piatto, così il PDF contiene
-    // davvero colli, targa e quote (e non solo la sagoma vuota del pianale).
+    // Carico di prova non banale: due PLT INDU a piatto, così il foglio stampato
+    // contiene davvero colli, targa e quote (e non la sola sagoma del pianale).
     await clickElement(cdp, 'quick-piatto-INDU');
     await clickElement(cdp, 'quick-piatto-INDU');
     await waitFor(
@@ -550,111 +571,233 @@ const main = async () => {
       4000,
       'due colli in scena'
     );
-    // Geometria reale dei colli piazzati dal motore first-fit dell'app.
-    const placedItems = await cdp.eval(`
-      return [...document.querySelectorAll('[data-canvas-item]')].map((g) => {
-        const rect = g.querySelector('rect');
-        const t = /translate\\(([-\\d.]+),\\s*([-\\d.]+)\\)/.exec(g.getAttribute('transform') || '');
+
+    /** Sostituisce `window.print` con una spia contabile (nessun dialogo reale). */
+    const installPrintSpy = () =>
+      cdp.eval(`
+        window.__printCalls = 0;
+        window.print = () => { window.__printCalls += 1; };
+        return true;
+      `);
+
+    /** Stato del ciclo di vita: modalità richiesta e chiamate a `window.print`. */
+    const printState = () =>
+      cdp.eval(`
         return {
-          id: g.getAttribute('data-canvas-item') + '_' + Math.round(Number(rect.getAttribute('x') ?? 0)),
-          code: g.getAttribute('data-canvas-item'),
-          name: 'PLT INDU',
-          width: Number(rect.getAttribute('width')),
-          length: Number(rect.getAttribute('height')),
-          x: t ? Number(t[1]) : 0,
-          y: t ? Number(t[2]) : 0,
-          rotation: 90,
-          color: '#E2E8F0',
-          borderColor: '#334155',
+          mode: document.documentElement.getAttribute('data-print-mode'),
+          calls: window.__printCalls,
         };
-      });
-    `);
-    // Proporzioni attese dell'immagine: le stesse dello snapshot pulito usato
-    // da "Copia Immagine" (NON quelle della scheda A4 formale, che è verticale).
-    const expected = await cdp.eval(`
-      const mod = await import('/truck-planner/src/utils/export.ts');
-      const vehicle = { id: 'bilico_cc', name: 'Bilico', width: 250, length: 1328 };
-      const snapshot = mod.buildPianoSvg(
-        vehicle,
-        ${JSON.stringify(placedItems)},
-        'all',
-        [],
-        ${JSON.stringify(PLATE)}
-      );
-      return { width: snapshot.width, height: snapshot.height, items: ${placedItems.length} };
-    `);
+      `);
 
-    await clickElement(cdp, 'btn-export-pdf');
-    const pdfFiles = await waitFor(
-      () => {
-        const files = downloadedPdfs();
-        return files.length > 0 ? files : null;
-      },
-      20000,
-      'download del PDF'
-    ).catch(() => null);
+    /** Chiude a mano il dialogo di stampa, che in headless non esiste. */
+    const finishPrinting = () =>
+      cdp.eval(`window.dispatchEvent(new Event('afterprint')); return true;`);
 
-    const expectedName = `piano-${PLATE}-${TODAY}.pdf`;
-    /** Vero se il file atteso è stato scaricato e analizzato: abilita l'ultimo passo. */
-    const pdfDownloaded = pdfFiles !== null && pdfFiles.includes(expectedName);
+    /**
+     * Testo della scheda di stampa (`#print-report`): vive nel DOM accanto
+     * all'app ma resta invisibile a schermo. Serve a provare che il foglio da
+     * stampare descrive il carico reale — targa del mezzo e colli in scena — e
+     * non una sagoma vuota.
+     */
+    const sheetText = () =>
+      cdp.eval(`
+        const sheet = document.getElementById('print-report');
+        return sheet ? sheet.textContent : '';
+      `);
+
+    await installPrintSpy();
+    await clickElement(cdp, 'btn-print-clean');
+    const afterCleanClick = await printState();
     check(
-      `PDF scaricato come \`${expectedName}\` (stessa convenzione del file .json)`,
-      pdfFiles !== null && pdfFiles.includes(expectedName) && plateSet === PLATE,
-      `${pdfFiles?.join(', ') ?? 'nessun file'} (targa "${plateSet}")`
+      'Stampa Solo Grafica: il click su `#btn-print-clean` imposta `data-print-mode="clean"` su `<html>` e chiama `window.print()`',
+      afterCleanClick.mode === 'clean' && afterCleanClick.calls === 1,
+      `data-print-mode=${JSON.stringify(afterCleanClick.mode)}, window.print() × ${afterCleanClick.calls}`
+    );
+    const sheet = await sheetText();
+    const plateOnSheet = sheet.includes(PLATE);
+    const loadOnSheet = /PLT\s*INDU/i.test(sheet);
+    check(
+      'Stampa Solo Grafica: il foglio da stampare descrive il carico reale (targa e colli in scena)',
+      plateSet === PLATE && plateOnSheet && loadOnSheet,
+      `targa "${plateSet}" ${plateOnSheet ? 'presente' : 'assente'}, colli ${
+        loadOnSheet ? 'elencati' : 'assenti'
+      }`
     );
 
-    if (pdfFiles && pdfFiles.includes(expectedName)) {
-      const bytes = readFileSync(join(downloadDir, expectedName));
-      const pdf = inspectPdf(bytes);
+    /* --- 3) PDF vettoriale leggero dal motore di stampa ------------------- *
+     *  Con la modalità `clean` ancora attiva si chiede a Chrome il PDF che il
+     *  suo stesso dialogo di stampa produrrebbe: deve essere **privo di immagini
+     *  raster** — la grafica è vettoriale, non più uno snapshot JPEG — e di peso
+     *  contenuto. Il file resta in `shots/` come evidenza ispezionabile. */
+    const printed = await cdp.send('Page.printToPDF', {
+      printBackground: true,
+      preferCSSPageSize: true,
+    });
+    const pdfBytes = Buffer.from(printed.data, 'base64');
+    const pdfText = pdfBytes.toString('latin1');
+    const pdfKb = pdfBytes.length / 1024;
 
-      check(
-        'PDF: header `%PDF-1.4` e chiusura `%%EOF`',
-        pdf.header.startsWith('%PDF-1.4') && pdf.eof === true,
-        `"${pdf.header}" · eof=${pdf.eof}`
-      );
-      check(
-        'PDF: tavola `xref` con offset reali (ogni voce punta al proprio `N 0 obj`)',
-        pdf.xrefOk === true && pdf.objects.length === 5,
-        `${pdf.objects.length} oggetti · ${pdf.objects.map((o) => o.pointsAt).join(' | ')}`
-      );
-      check(
-        'PDF: `/Length` dichiarati identici ai byte reali dei due flussi',
-        pdf.contentStreamOk === true && pdf.imageStreamOk === true,
-        `contenuto=${pdf.contentStreamOk}, immagine=${pdf.imageStreamOk} (${pdf.imageDeclaredLength} dichiarati / ${pdf.imageStreamLength} reali)`
-      );
-      check(
-        'PDF: pagina A4 verticale (MediaBox 595.28 × 841.89)',
-        pdf.mediaBox === '0 0 595.28 841.89',
-        pdf.mediaBox
-      );
-      check(
-        'PDF: grafica impaginata centrata dentro i margini di 10 mm',
-        pdf.fitsMargins === true,
-        pdf.cm ? `${pdf.cm.width}×${pdf.cm.height} pt @ (${pdf.cm.x}, ${pdf.cm.y})` : 'matrice `cm` assente'
-      );
-      check(
-        'PDF: immagine JPEG integra incorporata con `/DCTDecode` (nessun font: è solo grafica)',
-        pdf.filters.includes('DCTDecode') &&
-          pdf.fontResources === false &&
-          pdf.filters.length === 1,
-        `filtri=${pdf.filters.join(',')} · font=${pdf.fontResources}`
-      );
-      check(
-        'PDF: immagine a 3× (Retina HD, ~480 DPI su A4) con proporzioni = snapshot pulito di `Copia Immagine`, non la scheda A4',
-        expected.items === 2 &&
-          pdf.imageWidth === expected.width * 3 &&
-          Math.abs(pdf.imageHeight / pdf.imageWidth - expected.height / expected.width) < 0.002,
-        `${pdf.imageWidth}×${pdf.imageHeight} px (atteso ${expected.width * 3}×${expected.height * 3}, ${expected.items} colli)`
-      );
+    mkdirSync('shots', { recursive: true });
+    writeFileSync(join(...PRINT_EVIDENCE), pdfBytes);
+    console.log(
+      `Evidenza: ${PRINT_EVIDENCE.join('/')} (${pdfKb.toFixed(1)} kB, ${
+        isVectorOnlyPdf(pdfText) ? 'vettoriale' : 'contiene raster'
+      })`
+    );
 
-      // Evidenza grafica: il PDF è leggibile dal browser? Il file viene copiato
-      // in `shots/` per l'ispezione manuale dell'operatore.
-      mkdirSync('shots', { recursive: true });
-      writeFileSync(join('shots', 'pdf-solo-grafica.pdf'), bytes);
-      console.log(`Evidenza: shots/pdf-solo-grafica.pdf (${Math.round(bytes.length / 1024)} kB)`);
-    }
+    check(
+      'Stampa Solo Grafica: il PDF del motore di stampa è strutturalmente valido (`%PDF-` … `%%EOF`)',
+      pdfText.startsWith('%PDF-') && pdfText.trimEnd().endsWith('%%EOF'),
+      `"${pdfText.slice(0, 8)}" · ${pdfKb.toFixed(1)} kB`
+    );
+    check(
+      'Stampa Solo Grafica: PDF **vettoriale** — nessuna immagine raster incorporata (niente `/DCTDecode`)',
+      isVectorOnlyPdf(pdfText),
+      isVectorOnlyPdf(pdfText)
+        ? 'nessun `/Subtype /Image` nel documento'
+        : 'immagine raster trovata nel PDF'
+    );
+    check(
+      'Stampa Solo Grafica: PDF leggero (la grafica vettoriale resta ben sotto i 150 kB)',
+      pdfBytes.length < 150 * 1024,
+      `${pdfKb.toFixed(1)} kB`
+    );
 
-    /* --- 4) "Salva con nome" con file già agganciato ---------------------- */
+    await finishPrinting();
+    const afterCleanPrint = await printState();
+    check(
+      "Stampa Solo Grafica: `afterprint` rimuove l'attributo e il documento torna identico a prima",
+      afterCleanPrint.mode === null,
+      `data-print-mode=${JSON.stringify(afterCleanPrint.mode)}`
+    );
+
+    await clickElement(cdp, 'btn-print-report');
+    const afterReportClick = await printState();
+    check(
+      'Stampa Scheda Completa: il click su `#btn-print-report` imposta `data-print-mode="full"` e chiama `window.print()`',
+      afterReportClick.mode === 'full' && afterReportClick.calls === 2,
+      `data-print-mode=${JSON.stringify(afterReportClick.mode)}, window.print() × ${afterReportClick.calls}`
+    );
+    await finishPrinting();
+    const afterReportPrint = await printState();
+    check(
+      "Stampa Scheda Completa: `afterprint` rimuove l'attributo e il documento torna identico a prima",
+      afterReportPrint.mode === null,
+      `data-print-mode=${JSON.stringify(afterReportPrint.mode)}`
+    );
+
+    /* --- 4) Regole `@media print` della modalità `clean` ------------------ *
+     *  Le regole devono esistere **dentro** `@media print`: è la condizione che
+     *  le rende attive solo su carta, lasciando intatto lo schermo interattivo. */
+    const ruleScan = await cdp.eval(CLEAN_PRINT_RULES);
+    const cleanRules = ruleScan.found;
+    const printScoped = cleanRules.filter((r) => r.media.includes('print'));
+
+    check(
+      'Modalità `clean`: le regole esistono nei fogli di stile dentro `@media print`',
+      printScoped.length >= 3,
+      `${cleanRules.length} regole con \`data-print-mode\` su ${ruleScan.visited} ispezionate in ${
+        ruleScan.sheets
+      } fogli (${ruleScan.blocked} illeggibili)`
+    );
+    check(
+      'Modalità `clean`: intestazione, tabella, Pagina 2 e nota di rinvio sono `display: none !important`',
+      printScoped.some(
+        (r) =>
+          ruleHas(r, '#print-report header') &&
+          ruleHas(r, '#print-report .print-table') &&
+          ruleHas(r, '#print-report .print-page-second') &&
+          ruleHas(r, '[data-print-multipage-note]') &&
+          ruleHas(r, 'display: none') &&
+          ruleHas(r, 'important')
+      ),
+      printScoped.map((r) => r.selectors).join(' | ') || 'nessuna regola trovata'
+    );
+    check(
+      'Modalità `clean`: la prima pagina centra il disegno a piena altezza (277 mm, gap 0) e il disegno occupa il 100%',
+      printScoped.some(
+        (r) =>
+          ruleHas(r, '.print-page-first') &&
+          ruleHas(r, 'height: 277mm') &&
+          ruleHas(r, 'justify-content: center') &&
+          ruleHas(r, 'gap: 0')
+      ) &&
+        printScoped.some(
+          (r) =>
+            ruleHas(r, '.print-drawing') &&
+            ruleHas(r, 'width: 100%') &&
+            ruleHas(r, 'height: 100%')
+        ),
+      printScoped.map((r) => r.cssText).join(' | ') || 'nessuna regola trovata'
+    );
+
+    /* --- 5) Resa reale del foglio sotto media di stampa ------------------- *
+     *  `Emulation.setEmulatedMedia` fa valutare al browser le vere regole
+     *  `@media print`: si controlla l'effetto sull'impaginazione — quello che
+     *  l'operatore vede nel dialogo di stampa e nel PDF salvato. I due comandi
+     *  vengono azionati con un click programmatico sul pulsante reale: sotto
+     *  media di stampa l'interfaccia è `display: none` e non è più cliccabile
+     *  con un gesto del mouse, ma l'handler di React risponde lo stesso. */
+    await cdp.send('Emulation.setEmulatedMedia', { media: 'print' });
+
+    await cdp.eval(`document.getElementById('btn-print-clean').click(); return true;`);
+    const cleanSheet = await cdp.eval(PRINT_LAYOUT_PROBE);
+    check(
+      'Modalità `clean` su carta: interfaccia nascosta, scheda visibile, intestazione e tabella soppresse',
+      cleanSheet.mode === 'clean' &&
+        cleanSheet.screenApp !== null &&
+        cleanSheet.screenApp.display === 'none' &&
+        cleanSheet.report !== null &&
+        cleanSheet.report.display !== 'none' &&
+        cleanSheet.header !== null &&
+        cleanSheet.header.display === 'none' &&
+        (cleanSheet.table === null || cleanSheet.table.display === 'none'),
+      `mode=${cleanSheet.mode}, #screen-app=${cleanSheet.screenApp?.display}, #print-report=${
+        cleanSheet.report?.display
+      }, header=${cleanSheet.header?.display}, tabella=${cleanSheet.table?.display ?? 'assente'}`
+    );
+    check(
+      "Modalità `clean` su carta: il disegno riempie l'intera pagina A4 (centrato, gap 0)",
+      cleanSheet.page !== null &&
+        cleanSheet.drawing !== null &&
+        cleanSheet.page.justifyContent === 'center' &&
+        cleanSheet.page.alignItems === 'center' &&
+        cleanSheet.page.gap === '0px' &&
+        cleanSheet.drawing.height >= cleanSheet.page.height - 2 &&
+        Math.abs(cleanSheet.drawing.width - cleanSheet.page.width) <= 2,
+      `pagina ${cleanSheet.page?.width}×${cleanSheet.page?.height} px (gap ${cleanSheet.page?.gap}, ` +
+        `justify ${cleanSheet.page?.justifyContent}), disegno ${cleanSheet.drawing?.width}×${cleanSheet.drawing?.height} px`
+    );
+    await finishPrinting();
+
+    await cdp.eval(`document.getElementById('btn-print-report').click(); return true;`);
+    const fullSheet = await cdp.eval(PRINT_LAYOUT_PROBE);
+    check(
+      'Modalità `full` su carta: intestazione e tabella restano visibili (scheda tecnica completa)',
+      fullSheet.mode === 'full' &&
+        fullSheet.header !== null &&
+        fullSheet.header.display !== 'none' &&
+        fullSheet.table !== null &&
+        fullSheet.table.display !== 'none' &&
+        fullSheet.drawing !== null &&
+        fullSheet.page !== null &&
+        fullSheet.drawing.height < fullSheet.page.height,
+      `header=${fullSheet.header?.display}, tabella=${fullSheet.table?.display}, disegno ${
+        fullSheet.drawing?.height
+      } px su pagina ${fullSheet.page?.height} px`
+    );
+    await finishPrinting();
+    // Torna allo schermo: le verifiche successive misurano la plancia reale.
+    await cdp.send('Emulation.setEmulatedMedia', { media: 'screen' });
+
+    const afterAllPrints = await printState();
+    check(
+      'Stampa a modalità: nessun attributo residuo e schermo interattivo intatto',
+      afterAllPrints.mode === null && afterAllPrints.calls === 4,
+      `data-print-mode=${JSON.stringify(afterAllPrints.mode)}, window.print() × ${afterAllPrints.calls}`
+    );
+
+    /* --- 6) "Salva con nome" con file già agganciato ---------------------- */
     await installFakeHandles(cdp, [FIRST_FILE_NAME, COPY_FILE_NAME]);
     await shimSavePicker(cdp, [FIRST_FILE_NAME]);
     await clickElement(cdp, 'btn-save-project');
@@ -787,43 +930,6 @@ const main = async () => {
       `badge="${afterAbort.badge}", scritture=${afterAbort.writes}, dialoghi=${cdp.dialogs.length}`
     );
 
-    /* --- 6) Il PDF è leggibile dal motore PDF di Chrome ------------------- *
-     *  Ultimo passo (la pagina lascia l'applicazione): il file scaricato viene
-     *  riaperto con `file://` e Chrome deve riconoscerlo come PDF e disegnarlo
-     *  con il proprio visualizzatore interno. La schermata viene salvata come
-     *  evidenza in `shots/pdf-solo-grafica-anteprima.png`. */
-    if (pdfDownloaded) {
-      await cdp.send('Page.navigate', { url: pathToFileURL(join(downloadDir, expectedName)).href });
-      const viewer = await waitFor(
-        async () => {
-          const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
-          const frame = list.find(
-            (t) => t.type === 'iframe' && String(t.url).startsWith(CHROME_PDF_VIEWER)
-          );
-          const page = list.find((t) => t.type === 'page');
-          return frame ? { viewer: String(frame.url), pageTitle: page?.title ?? '' } : null;
-        },
-        10000,
-        'visualizzatore PDF interno di Chrome'
-      ).catch(() => null);
-
-      // Un attimo di respiro perché il viewer abbia disegnato la pagina A4.
-      await sleep(2000);
-      mkdirSync('shots', { recursive: true });
-      const preview = await cdp.send('Page.captureScreenshot', { format: 'png' });
-      writeFileSync(
-        join('shots', 'pdf-solo-grafica-anteprima.png'),
-        Buffer.from(preview.data, 'base64')
-      );
-
-      check(
-        'PDF: Chrome lo apre nel visualizzatore interno (file valido e disegnato)',
-        viewer !== null && viewer.pageTitle === expectedName,
-        viewer ? `viewer attivo, titolo "${viewer.pageTitle}"` : 'visualizzatore PDF non attivato'
-      );
-      console.log('Evidenza grafica: shots/pdf-solo-grafica-anteprima.png');
-    }
-
     /* --- 7) Console pulita ------------------------------------------------ */
     check(
       'Nessun errore runtime in console',
@@ -835,7 +941,8 @@ const main = async () => {
     console.log(
       `Durata della verifica: ${((Date.now() - startedAt) / 1000).toFixed(2)} s (limite ${WATCHDOG_MS / 1000} s)`
     );
-    console.log(`Download analizzati in: ${downloadDir}`);
+    console.log(`Download isolati in: ${downloadDir}`);
+    console.log(`Evidenze della stampa in: ${join(...PRINT_EVIDENCE)}`);
   } finally {
     try {
       ws?.close();

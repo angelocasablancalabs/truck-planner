@@ -293,7 +293,7 @@ const main = async () => {
     const deadline = Date.now() + 10000;
     for (;;) {
       const ready = await cdp.eval(
-        `return Boolean(document.getElementById('btn-export-pdf') && document.getElementById('quick-punta-INDU'));`
+        `return Boolean(document.getElementById('btn-print-clean') && document.getElementById('quick-punta-INDU'));`
       );
       if (ready) break;
       if (Date.now() > deadline) {

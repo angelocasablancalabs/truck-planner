@@ -11,7 +11,6 @@ import type {
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '../constants';
 import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
-import { exportCleanPianoToPdf } from '../utils/pdfExport';
 import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
 import {
   isOpenPickerSupported,
@@ -30,7 +29,6 @@ import {
   ChevronRight,
   Copy,
   Check,
-  Printer,
   Download,
   Save,
   SaveAll,
@@ -41,20 +39,19 @@ import {
 } from 'lucide-react';
 
 /**
- * Icona "PDF" disegnata a mano nello **stesso stile delle icone Lucide**
- * (griglia 24×24, stroke 2 px, `currentColor`): sagoma del foglio con la piega
- * dell'angolo in alto a destra e, al posto delle righe di testo, il badge con la
- * dicitura geometrica `PDF`.
+ * Icona **`PrinterGraphicIcon`** — "Stampa Solo Grafica".
  *
- * Serve a rendere immediatamente riconoscibile il comando "Scarica PDF Solo
- * Grafica" senza ricorrere a un accento cromatico: come le altre cinque icone
- * della toolbar eredita il grigio ardesia istituzionale (`text-slate-600`).
+ * Riprende la sagoma Lucide della stampante (`polyline` del coperchio, corpo con
+ * la fessura d'uscita, `rect` del foglio) e vi sostituisce il contenuto del
+ * foglio: al posto delle righe di testo compare un **simbolo grafico** — un
+ * piccolo profilo a zig-zag con il punto di controllo in alto a destra — che
+ * rende immediatamente riconoscibile il comando che manda in stampa (o salva in
+ * PDF vettoriale leggero) il **solo disegno del pianale**.
  *
- * Il badge è un rettangolo `fill="currentColor"` con il testo in bianco puro e
- * `stroke="none"`, così la scritta resta nitida e non viene "sporcata" dal
- * contorno ereditato dal gruppo.
+ * Come tutte le altre icone della toolbar eredita l'ardesia istituzionale
+ * (`text-slate-600`) via `currentColor`, con `strokeWidth` 2 px come Lucide.
  */
-const PdfFileIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+const PrinterGraphicIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
     viewBox="0 0 24 24"
     fill="none"
@@ -66,23 +63,39 @@ const PdfFileIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }
     aria-hidden="true"
     focusable="false"
   >
-    {/* Sagoma foglio con piega */}
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    {/* Badge con dicitura PDF */}
-    <rect x="5.5" y="12" width="13" height="7" rx="1.5" fill="currentColor" stroke="none" />
-    <text
-      x="12"
-      y="17.2"
-      textAnchor="middle"
-      fontSize="5"
-      fontWeight="900"
-      fontFamily="system-ui, -apple-system, sans-serif"
-      fill="#FFFFFF"
-      stroke="none"
-    >
-      PDF
-    </text>
+    <polyline points="6 9 6 2 18 2 18 9" />
+    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    <rect x="6" y="14" width="12" height="8" />
+    <circle cx="15.5" cy="16.5" r="1" fill="currentColor" stroke="none" />
+    <polyline points="8 20 11 17 14 20" />
+  </svg>
+);
+
+/**
+ * Icona **`PrinterReportIcon`** — "Stampa Scheda Completa".
+ *
+ * Stessa sagoma della stampante, ma il foglio in uscita porta **due righe di
+ * testo** (`line`) di lunghezza diversa: è il segno distintivo della scheda
+ * tecnica A4 completa, con intestazione formale, targa e riepilogo colli.
+ * Stesso stile Lucide (24×24, stroke 2 px, `currentColor`).
+ */
+const PrinterReportIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+    focusable="false"
+  >
+    <polyline points="6 9 6 2 18 2 18 9" />
+    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    <rect x="6" y="14" width="12" height="8" />
+    <line x1="9" y1="17" x2="15" y2="17" />
+    <line x1="9" y1="20" x2="13" y2="20" />
   </svg>
 );
 
@@ -273,11 +286,6 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   // Esito dell'ultima esportazione: alimenta il feedback temporaneo del pulsante.
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>('idle');
   const [isCopying, setIsCopying] = useState<boolean>(false);
-  // Esportazione PDF diretta in corso: il pulsante resta disabilitato finché il
-  // canvas non ha finito di rasterizzare lo snapshot (mezzo secondo circa).
-  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
-  // Guardiano anti doppio click, attivo già nel primo giro di eventi.
-  const exportingPdfRef = useRef<boolean>(false);
   // Timer di reset del feedback: si spegne da solo dopo 2,5 secondi.
   const copyFeedbackTimer = useRef<number | null>(null);
 
@@ -552,27 +560,32 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         : 'text-slate-600 hover:text-slate-900';
 
   /**
-   * Esporta il disegno del pianale (veicolo, colli, quote, targa e note) in un
-   * PDF A4 pulito, senza intestazione né tabella dei totali, e lo scarica
-   * direttamente nella cartella Download.
+   * **Stampa nativa del browser pilotata da modalità** (nessun raster JPEG, nessuna
+   * libreria PDF esterna).
    *
-   * Il guardiano `ref` blocca il doppio click **prima** che React abbia
-   * ridisegnato il pulsante come disabilitato: senza di esso due click rapidi
-   * farebbero partire due rasterizzazioni e due download.
+   * L'attributo `data-print-mode` posto su `<html>` seleziona il sottoinsieme di
+   * regole `@media print` di `src/index.css` e quindi il contenuto del foglio:
+   *   - `'clean'` → **solo la grafica** del pianale (camion vettoriale, targa e
+   *     note centrati a piena pagina): il dialogo di stampa del browser può
+   *     essere salvato come PDF **vettoriale puro da 20–40 KB**, nitido al 100%
+   *     a qualunque zoom, oppure inviato a una stampante fisica;
+   *   - `'full'`  → la **scheda tecnica A4 completa** (`PrintReport`), con
+   *     intestazione formale, targa e riepilogo colli su una o due pagine.
+   *
+   * Il documento è identico a prima della stampa: l'attributo viene rimosso
+   * all'evento `afterprint`, che il browser emette alla chiusura del dialogo
+   * (annullamento compreso), così lo schermo non resta mai in stato "di stampa".
    */
-  const handleExportPdf = async () => {
-    if (exportingPdfRef.current) return;
-    exportingPdfRef.current = true;
-    setIsExportingPdf(true);
-    try {
-      await exportCleanPianoToPdf(vehicle, items, labelDensity, notes, plate);
-    } catch (error) {
-      console.error('[ControlDeck] Esportazione PDF non riuscita:', error);
-      window.alert('Impossibile generare il PDF.');
-    } finally {
-      exportingPdfRef.current = false;
-      setIsExportingPdf(false);
-    }
+  const triggerPrint = (mode: 'clean' | 'full') => {
+    document.documentElement.setAttribute('data-print-mode', mode);
+    window.print();
+    window.addEventListener(
+      'afterprint',
+      () => {
+        document.documentElement.removeAttribute('data-print-mode');
+      },
+      { once: true }
+    );
   };
 
   return (
@@ -604,9 +617,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
       {/* --- Toolbar Comandi: 2 righe × 3 colonne a sole icone --------------- *
        *  Riga 1 · Gestione File `.json`: salvataggio in-place (`Ctrl / Cmd + S`),
        *  "Salva con nome" su una nuova copia e apertura di un piano `.json`.
-       *  Riga 2 · Output & Condivisione: copia dell'immagine negli appunti,
-       *  PDF della sola grafica (senza intestazione né totali) e stampa della
-       *  scheda tecnica A4 completa.
+       *  Riga 2 · Output & Condivisione: copia dell'immagine negli appunti (PNG
+       *  per WhatsApp / Mail), stampa nativa della **sola grafica** (PDF
+       *  vettoriale leggero, senza intestazione né totali) e stampa della
+       *  **scheda tecnica A4 completa**.
        *  Ogni pulsante è una sola icona da 16 px: il testo descrittivo vive nel
        *  `title` (tooltip esaustivo) e in uno `span.sr-only` per gli screen
        *  reader — nessuna etichetta visibile, larghezza uniforme su 3 colonne.
@@ -614,8 +628,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
        *  istituzionale `text-slate-600` con hover `hover:text-slate-900`;
        *  l'unico accento cromatico ammesso è il **feedback dinamico** — verde
        *  `text-emerald-600` su `Copia Immagine` (immagine copiata) e su `Salva`
-       *  (piano scritto su disco). Il comando PDF si riconosce dalla sagoma con
-       *  il badge `PDF` (`PdfFileIcon`), non da un colore diverso. */}
+       *  (piano scritto su disco). I due comandi di stampa si distinguono dalla
+       *  **sola forma dell'icona** — foglio con simbolo grafico
+       *  (`PrinterGraphicIcon`) contro foglio con righe di testo
+       *  (`PrinterReportIcon`) — non da un colore diverso. */}
       <div className="space-y-1.5">
         {/* Riga 1: Gestione File .json (Salva, Salva con nome, Apri) */}
         <div className="grid grid-cols-3 gap-1.5">
@@ -680,7 +696,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
           />
         </div>
 
-        {/* Riga 2: Output & Condivisione (Copia, PDF, Stampa) */}
+        {/* Riga 2: Output & Condivisione (Copia Immagine PNG, Stampa Solo
+            Grafica, Stampa Scheda Completa) */}
         <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
@@ -695,32 +712,32 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             <span className="sr-only">{copyLabel}</span>
           </button>
 
+          {/* Stampa Solo Grafica: `triggerPrint('clean')` → il dialogo nativo di
+              stampa impagina il solo disegno del pianale a piena pagina, quindi
+              si può salvare un PDF **vettoriale** leggerissimo (20–40 KB) o
+              stamparlo su carta con qualità nitida al 100%. */}
           <button
             type="button"
-            id="btn-export-pdf"
-            onClick={() => void handleExportPdf()}
-            disabled={isExportingPdf}
-            aria-busy={isExportingPdf}
-            title={
-              isExportingPdf
-                ? 'Generazione del PDF in corso…'
-                : 'Scarica PDF Solo Grafica (disegno del carico pulito, con targa e note)'
-            }
-            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs disabled:opacity-60 disabled:cursor-progress"
+            id="btn-print-clean"
+            onClick={() => triggerPrint('clean')}
+            title="Stampa solo grafica (disegno del pianale pulito con targa e note, salvabile anche in PDF leggero)"
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 transition cursor-pointer shadow-xs"
           >
-            <PdfFileIcon className="w-4 h-4 text-slate-600 hover:text-slate-900" />
-            <span className="sr-only">PDF Solo Grafica</span>
+            <PrinterGraphicIcon className="w-4 h-4" />
+            <span className="sr-only">Stampa Solo Grafica</span>
           </button>
 
+          {/* Stampa Scheda Tecnica Completa: `triggerPrint('full')` → scheda A4
+              formale con intestazione, disegno e riepilogo colli. */}
           <button
             type="button"
             id="btn-print-report"
-            onClick={() => window.print()}
-            title="Stampa Piano (scheda tecnica A4 completa di intestazione e riepilogo)"
-            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs"
+            onClick={() => triggerPrint('full')}
+            title="Stampa scheda tecnica (scheda A4 completa di intestazione, targa e riepilogo colli)"
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 transition cursor-pointer shadow-xs"
           >
-            <Printer className="w-4 h-4 text-slate-600 hover:text-slate-900" />
-            <span className="sr-only">Stampa Piano</span>
+            <PrinterReportIcon className="w-4 h-4" />
+            <span className="sr-only">Stampa Scheda Completa</span>
           </button>
         </div>
 

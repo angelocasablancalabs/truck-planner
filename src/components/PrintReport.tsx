@@ -910,7 +910,10 @@ export const PrintReport: React.FC<PrintReportProps> = ({
             tabella lascia il posto a una nota discreta di rinvio, così il
             disegno resta a grandezza piena e non compresso. */}
         {isMultiPage && (
-          <div className="text-center text-[10px] text-slate-500 font-semibold py-1">
+          <div
+            data-print-multipage-note
+            className="text-center text-[10px] text-slate-500 font-semibold py-1"
+          >
             {PRINT_PAGE_TWO_HINT}
           </div>
         )}
