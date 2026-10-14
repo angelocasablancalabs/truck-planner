@@ -9,7 +9,6 @@ import {
   NOTE_MIN_WIDTH_CM,
   NOTE_PASTEL_COLORS,
   NOTE_SIZE_STEP_CM,
-  noteCharsPerLine,
   noteGeometry,
   resolveNoteFontSize,
 } from '../utils/sideNotes';
@@ -95,7 +94,7 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
       onPointerDown={(e) => e.stopPropagation()}
       className="note-inspector pointer-events-auto w-full bg-white/95 backdrop-blur-xs border border-slate-300 rounded-lg shadow-lg p-3.5 space-y-2.5 font-sans text-slate-800 transition-all select-none"
     >
-      {/* --- Intestazione: titolo, chiusura della card e badge coordinate ------- */}
+      {/* --- Intestazione: titolo e chiusura della card ------------------------ */}
       <div className="flex items-start justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 text-xs font-bold text-slate-800">
           <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
@@ -113,10 +112,6 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
         </button>
       </div>
 
-      <span className="inline-block rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] font-bold tabular-nums text-slate-700">
-        X {note.x.toFixed(1)} · Y {note.y.toFixed(1)} cm
-      </span>
-
       {/* --- TESTO DELLA NOTA: unico campo libero multi-riga della card -------- */}
       <label className="block space-y-1">
         <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -130,10 +125,6 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
           placeholder="Scrivi avvertenze, cliente o note operative..."
           className="w-full resize-y bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 leading-snug focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
-        <span className="block text-[10px] text-slate-400 italic leading-snug">
-          Il testo va a capo da solo, su {noteCharsPerLine(note.width, fontSize)} caratteri per
-          riga con la dimensione attuale.
-        </span>
       </label>
 
       {/* --- Dimensione del testo: i tre corpi della scala ufficiale ----------- */}
@@ -174,7 +165,7 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
       <div className="flex gap-2">
         <label className="flex-1 space-y-1">
           <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-            Larghezza (W cm)
+            Larghezza
           </span>
           <input
             type="number"
@@ -190,7 +181,7 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
 
         <label className="flex-1 space-y-1">
           <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-            Altezza (H cm)
+            Altezza
           </span>
           <input
             type="number"

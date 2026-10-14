@@ -22,7 +22,8 @@
  *    4. **UI**: riga "File attivo" con nome e tooltip, feedback `Salvato!` per 2 s
  *       con il nome del file nel tooltip, tooltip a riposo `Salva modifiche (Ctrl / Cmd + S)`;
  *    5. **Annullamenti e distacco**: `AbortError` silenzioso su salva e apri,
- *       `Svuota` che stacca l'handle, fallback di download con nome file attivo.
+ *       `Svuota` che azzera il carico lasciando agganciato il file attivo,
+ *       `Nuovo Piano` che sgancia l'handle, fallback di download con nome file attivo.
  *
  *  Nota di metodo: Chrome headless **espone** la File System Access API ma non
  *  può mostrare le finestre di dialogo native (la promise non si risolve mai).
@@ -59,12 +60,21 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-/** Verde `green-600` di Tailwind v4 (feedback `Salvato!`), con il fallback RGB. */
-const VERDE_600 = ['oklch(0.627 0.194 149.214)', 'rgb(22, 163, 74)'];
+/**
+ * Verde `emerald-600` di Tailwind v4, colore dell'icona `Salva` nel feedback
+ * `Salvato!`, con il fallback RGB.
+ */
+const VERDE_600 = ['oklch(0.596 0.145 163.225)', 'rgb(5, 150, 105)'];
 /** Durata del feedback verde sul pulsante di salvataggio (ms). */
 const SAVE_FEEDBACK_MS = 2000;
-/** Tooltip a riposo del pulsante di salvataggio. */
-const SAVE_TITLE_IDLE = 'Salva modifiche (Ctrl / Cmd + S)';
+/** Tooltip a riposo del pulsante `Salva` quando nessun file è agganciato. */
+const SAVE_TITLE_IDLE = 'Salva piano di carico (Ctrl / Cmd + S)';
+/** Tooltip a riposo del pulsante `Salva` con un file attivo agganciato. */
+const saveTitleWithFile = (fileName) => `Salva modifiche su ${fileName} (Ctrl / Cmd + S)`;
+/** Etichetta accessibile (`sr-only`) del pulsante `Salva` a riposo. */
+const SAVE_LABEL_IDLE = 'Salva';
+/** Etichetta accessibile (`sr-only`) del pulsante `Salva` a feedback acceso. */
+const SAVE_LABEL_SAVED = 'Salvato!';
 
 /** Nome del file "agganciato" dai selettori finti (apertura e salvataggio). */
 const FAKE_FILE_NAME = 'piano-piazzale.json';
@@ -328,8 +338,10 @@ const shimPicker = (cdp, picker, mode) =>
 const SNAPSHOT = `
   const deck = document.querySelector('.control-deck');
   const items = [...document.querySelectorAll('[data-canvas-item]')];
-  const activeFile = document.getElementById('active-file-name');
+  const activeFile = document.getElementById('active-file-badge');
   const saveBtn = document.getElementById('btn-save-project');
+  // La toolbar è a sole icone: l'etichetta vive nello \`span.sr-only\`.
+  const saveSpan = saveBtn ? saveBtn.querySelector('span.sr-only') : null;
   const total = /(\\d+)\\s+Colli Totali/.exec(deck?.textContent || '');
   return {
     itemCount: items.length,
@@ -339,9 +351,11 @@ const SNAPSHOT = `
       : null,
     activeFileTitle: activeFile ? activeFile.getAttribute('title') : null,
     activeFileClass: activeFile ? activeFile.className : null,
-    saveLabel: saveBtn ? (saveBtn.querySelector('span')?.textContent || '').trim() : null,
+    saveLabel: saveSpan ? (saveSpan.textContent || '').trim() : null,
     saveTitle: saveBtn ? saveBtn.getAttribute('title') : null,
-    saveLabelColor: saveBtn ? getComputedStyle(saveBtn.querySelector('span')).color : null,
+    saveIconColor: saveBtn && saveBtn.querySelector('svg')
+      ? getComputedStyle(saveBtn.querySelector('svg')).color
+      : null,
     plateInput: document.getElementById('vehicle-plate-input')?.value ?? null,
     writes: (window.__writes ?? []).length,
     ctrlS: window.__ctrlS
@@ -704,26 +718,26 @@ const main = async () => {
     check(
       'Riga "File attivo" in sidebar: nome del file e tooltip dedicato',
       afterOpen.activeFileName === FAKE_FILE_NAME &&
-        afterOpen.activeFileTitle === `File attivo: ${FAKE_FILE_NAME}`,
+        afterOpen.activeFileTitle === `File attualmente aperto: ${FAKE_FILE_NAME}`,
       `"${afterOpen.activeFileName}" · "${afterOpen.activeFileTitle}"`
     );
     check(
-      'Stile discreto richiesto per la riga del file attivo (`text-[10px]`, mono, truncate)',
+      'Stile discreto richiesto per la riga del file attivo (badge `text-[11px]`, mono, truncate)',
       [
-        'text-[10px]',
-        'text-slate-500',
+        'text-[11px]',
+        'text-slate-700',
         'font-mono',
         'flex',
         'items-center',
-        'gap-1',
-        'mt-1',
+        'gap-1.5',
         'truncate',
       ].every((cls) => (afterOpen.activeFileClass || '').split(/\s+/).includes(cls)),
       afterOpen.activeFileClass
     );
     check(
-      'Tooltip a riposo del pulsante: `Salva modifiche (Ctrl / Cmd + S)`',
-      afterOpen.saveTitle === SAVE_TITLE_IDLE && afterOpen.saveLabel === 'Salva Piano',
+      'Tooltip a riposo del pulsante `Salva` con file agganciato (icona + `Ctrl / Cmd + S`)',
+      afterOpen.saveTitle === saveTitleWithFile(FAKE_FILE_NAME) &&
+        afterOpen.saveLabel === SAVE_LABEL_IDLE,
       `"${afterOpen.saveLabel}" · "${afterOpen.saveTitle}"`
     );
 
@@ -732,7 +746,7 @@ const main = async () => {
     const deckClip = await cdp.eval(`
       const save = document.getElementById('btn-save-project').getBoundingClientRect();
       const open = document.getElementById('btn-open-project').getBoundingClientRect();
-      const file = document.getElementById('active-file-name').getBoundingClientRect();
+      const file = document.getElementById('active-file-badge').getBoundingClientRect();
       const left = Math.min(save.left, open.left, file.left) - 12;
       const top = Math.min(save.top, open.top) - 12;
       const right = Math.max(save.right, open.right, file.right) + 12;
@@ -803,11 +817,11 @@ const main = async () => {
       `${downloadsBeforeCtrlS} → ${downloadsAfterCtrlS.length} file scaricati`
     );
     check(
-      'Feedback `Salvato!` in verde con il nome del file salvato nel tooltip',
-      feedback.saveLabel === 'Salvato!' &&
-        VERDE_600.includes(feedback.saveLabelColor) &&
-        feedback.saveTitle === `File salvato: ${FAKE_FILE_NAME}`,
-      `"${feedback.saveLabel}" · "${feedback.saveTitle}"`
+      'Feedback `Salvato!` in verde (icona) con il nome del file salvato nel tooltip',
+      feedback.saveLabel === SAVE_LABEL_SAVED &&
+        VERDE_600.includes(feedback.saveIconColor) &&
+        feedback.saveTitle === `Salvato su ${FAKE_FILE_NAME}!`,
+      `"${feedback.saveLabel}" (icona ${feedback.saveIconColor}) · "${feedback.saveTitle}"`
     );
 
     // Evidenza grafica: file attivo agganciato + feedback di salvataggio.
@@ -857,11 +871,12 @@ const main = async () => {
     const afterFeedback = await cdp.eval(SNAPSHOT);
     check(
       'Il feedback `Salvato!` si spegne dopo 2 s e il tooltip torna quello a riposo',
-      afterFeedback.saveLabel === 'Salva Piano' && afterFeedback.saveTitle === SAVE_TITLE_IDLE,
+      afterFeedback.saveLabel === SAVE_LABEL_IDLE &&
+        afterFeedback.saveTitle === saveTitleWithFile(FAKE_FILE_NAME),
       `"${afterFeedback.saveLabel}" · "${afterFeedback.saveTitle}"`
     );
 
-    /* --- 6) `Svuota` stacca l'handle del file attivo ---------------------- */
+    /* --- 6) `Svuota` azzera il carico senza staccare il file attivo ------- */
     cdp.dialogs.length = 0;
     await clickElement(cdp, 'btn-clear-all');
     await waitFor(
@@ -872,9 +887,28 @@ const main = async () => {
     );
     const afterClear = await cdp.eval(SNAPSHOT);
     check(
-      '`Svuota` azzera il pianale e stacca il file attivo (nessuna riga "File attivo")',
-      afterClear.itemCount === 0 && afterClear.activeFileName === null,
+      '`Svuota` azzera il pianale mantenendo agganciato il file attivo',
+      afterClear.itemCount === 0 && afterClear.activeFileName === FAKE_FILE_NAME,
       `${afterClear.itemCount} colli · file attivo ${afterClear.activeFileName}`
+    );
+
+    /* --- 6-bis) `Nuovo Piano` azzera tutto e sgancia il file attivo -------- */
+    // È il comando che riporta la plancia allo stato iniziale: da qui in avanti
+    // nessun file è più agganciato e il primo salvataggio riapre il selettore.
+    cdp.dialogs.length = 0;
+    await clickElement(cdp, 'btn-new-project');
+    await waitFor(
+      async () => cdp.eval(`return document.getElementById('active-file-badge') === null ? 1 : 0;`),
+      4000,
+      'sgancio del file attivo'
+    );
+    const afterNewProject = await cdp.eval(SNAPSHOT);
+    check(
+      '`Nuovo Piano` sgancia il file attivo e riporta il pianale a zero',
+      afterNewProject.activeFileName === null &&
+        afterNewProject.itemCount === 0 &&
+        afterNewProject.saveLabel === SAVE_LABEL_IDLE,
+      `file attivo ${afterNewProject.activeFileName} · ${afterNewProject.itemCount} colli · "${afterNewProject.saveLabel}"`
     );
 
     /* --- 7) Annullamenti silenziosi del selettore nativo ------------------ */
@@ -888,7 +922,8 @@ const main = async () => {
     check(
       'Salvataggio annullato dal pulsante: nessun feedback, nessuna scrittura, nessun download',
       afterAbortSave.writes === 0 &&
-        afterAbortSave.saveLabel === 'Salva Piano' &&
+        afterAbortSave.saveLabel === SAVE_LABEL_IDLE &&
+        afterAbortSave.saveTitle === SAVE_TITLE_IDLE &&
         afterAbortSave.activeFileName === null &&
         downloadedJson().length === downloadsBeforeAbort &&
         cdp.dialogs.length === 0,
@@ -932,7 +967,8 @@ const main = async () => {
     );
     check(
       'Dopo il fallback il nome del file scaricato diventa il "File attivo" in sidebar',
-      afterFallback.activeFileName === FALLBACK_FILE_NAME && afterFallback.saveLabel === 'Salvato!',
+      afterFallback.activeFileName === FALLBACK_FILE_NAME &&
+        afterFallback.saveLabel === SAVE_LABEL_SAVED,
       `"${afterFallback.activeFileName}" · "${afterFallback.saveLabel}"`
     );
 

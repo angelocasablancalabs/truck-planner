@@ -344,8 +344,8 @@ const main = async () => {
     /* =================================================================== *
      *  2) COMPARSA DELLA CARD + NESSUN LAYOUT SHIFT DEL RIEPILOGO STIVA
      * =================================================================== */
-    await clickSelector(cdp, '#quick-piatto-EUR');
-    const afterAdd = await cdp.eval(`
+    /** Fotografia di card + layout HUD, misurata sullo stato corrente. */
+    const readInspector = () => cdp.eval(`
       const el = window.__inspector();
       const canvas = document.querySelector('.canvas-hud').parentElement.getBoundingClientRect();
       const r = el ? el.getBoundingClientRect() : null;
@@ -372,45 +372,57 @@ const main = async () => {
         summaryTop: window.__summaryTop(),
       };
     `);
+    await clickSelector(cdp, '#quick-piatto-EUR');
+    const afterAdd = await readInspector();
     check(
       'Il click su "Piatto" di PLT EUR stiva il collo sul pianale',
       afterAdd.items === 1,
       `${afterAdd.items} colli`
     );
-    check('Il nuovo collo resta selezionato', afterAdd.selected === 1);
-    check('La card fluttuante compare con la selezione', afterAdd.inspector === true);
+    check('Il collo appena aggiunto NON è auto-selezionato', afterAdd.selected === 0);
+    check('La card fluttuante non compare senza selezione esplicita', afterAdd.inspector === false);
+
+    // La card compare solo dopo una selezione esplicita sul pianale.
+    const firstItemId = await cdp.eval(`return window.__items()[0].id;`);
+    await clickItem(cdp, firstItemId);
+    const shown = await readInspector();
+    check(
+      'La card fluttuante compare dopo il click di selezione sul pianale',
+      shown.inspector === true && shown.selected === 1,
+      `selezionati ${shown.selected}`
+    );
     check(
       'Intestazione del collo singolo: nome e quote',
-      /^Selezionato: PLT EUR \(120×80 cm\)$/.test(afterAdd.header),
-      afterAdd.header
+      /^Selezionato: PLT EUR \(120×80 cm\)$/.test(shown.header),
+      shown.header
     );
     check(
       'La card è ancorata in alto a sinistra dell\'area canvas (top-4 left-4)',
-      afterAdd.offsetLeft === 16 && afterAdd.offsetTop === 16,
-      `left ${afterAdd.offsetLeft}px, top ${afterAdd.offsetTop}px`
+      shown.offsetLeft === 16 && shown.offsetTop === 16,
+      `left ${shown.offsetLeft}px, top ${shown.offsetTop}px`
     );
     check(
       'La colonna HUD che ospita la card è assoluta a z-20 e trasparente ai pointer',
-      afterAdd.panelPosition === 'absolute' &&
-        afterAdd.panelZ === '20' &&
-        afterAdd.panelPointer === 'none' &&
-        afterAdd.cardPointer === 'auto',
-      `${afterAdd.panelPosition} · z${afterAdd.panelZ} · pointer-events ${afterAdd.panelPointer} → ${afterAdd.cardPointer}`
+      shown.panelPosition === 'absolute' &&
+        shown.panelZ === '20' &&
+        shown.panelPointer === 'none' &&
+        shown.cardPointer === 'auto',
+      `${shown.panelPosition} · z${shown.panelZ} · pointer-events ${shown.panelPointer} → ${shown.cardPointer}`
     );
     check(
       'La card usa il vetro smerigliato (backdrop-blur-xs)',
-      typeof afterAdd.backdrop === 'string' && afterAdd.backdrop.includes('blur'),
-      String(afterAdd.backdrop)
+      typeof shown.backdrop === 'string' && shown.backdrop.includes('blur'),
+      String(shown.backdrop)
     );
     check(
       'Comparsa con dissolvenza dedicata (item-inspector-in)',
-      afterAdd.animation === 'item-inspector-in',
-      `${afterAdd.animation} ${afterAdd.animationMs}`
+      shown.animation === 'item-inspector-in',
+      `${shown.animation} ${shown.animationMs}`
     );
     check(
-      'Riepilogo Stiva FERMO: il collo appena stivato resta selezionato senza spostare la sidebar',
-      Math.abs(afterAdd.summaryTop - rest.summaryTop) <= 0.5,
-      `prima ${rest.summaryTop}, dopo ${afterAdd.summaryTop}`
+      'Riepilogo Stiva FERMO: il collo selezionato non sposta la sidebar',
+      Math.abs(shown.summaryTop - rest.summaryTop) <= 0.5,
+      `prima ${rest.summaryTop}, dopo ${shown.summaryTop}`
     );
     // Prova regina: a stiva invariata (1 collo) si confronta la sidebar con la
     // card CHIUSA e con la card APERTA: deve essere identica al pixel.

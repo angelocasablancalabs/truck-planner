@@ -515,7 +515,10 @@ const main = async () => {
       return out;
     `);
 
-    const uniformGaps = deck.gaps.slice(0, 5);
+    // Il blocco "Scorciatoie da tastiera" è spinto in fondo da `mt-auto`: il suo
+    // distacco dalla sezione precedente è elastico (assorbe lo spazio residuo),
+    // quindi l'uniformità dei 14 px si misura sui primi quattro stacchi.
+    const uniformGaps = deck.gaps.slice(0, 4);
     check(
       'Sidebar: padding radice compatto `p-4` (16 px)',
       deck.rootPaddingPx === 16,
@@ -524,7 +527,7 @@ const main = async () => {
     check(
       'Sidebar: spaziatura fra macro-sezioni `space-y-3.5` (14 px)',
       deck.sectionMarginBottomPx === 14 && uniformGaps.every((gap) => gap === 14),
-      `margine di sezione = ${deck.sectionMarginBottomPx} px, gap misurati = [${uniformGaps.join(', ')}] px (era 24 px)`
+      `margine di sezione = ${deck.sectionMarginBottomPx} px, gap misurati = [${uniformGaps.join(', ')}] px (era 24 px; ultimo stacco elastico ${deck.gaps[4] ?? 0} px per \`mt-auto\`)`
     );
     check(
       'Intestazione: margine inferiore ridotto `pb-2` (8 px)',
@@ -532,9 +535,9 @@ const main = async () => {
       `padding-bottom = ${deck.headerPaddingBottomPx} px (era 12 px con pb-3)`
     );
     check(
-      'Griglia comandi (Copia, Stampa, Salva, Apri): `gap-1.5` (6 px)',
+      'Toolbar a icone (2 righe × 3 colonne): `gap-1.5` (6 px) su entrambe le righe',
       deck.cmdGapPx === 6 && deck.saveGapPx === 6,
-      `gap comandi = ${deck.cmdGapPx} px, gap salva/apri = ${deck.saveGapPx} px (era 8 px)`
+      `gap riga output = ${deck.cmdGapPx} px, gap riga file = ${deck.saveGapPx} px (era 8 px)`
     );
     check(
       'Mezzo / Targa: spazio etichetta → input ridotto a `space-y-1` (≤ 6 px)',
@@ -585,6 +588,12 @@ const main = async () => {
           background: style.backgroundColor,
           borderColor: style.borderTopColor,
           marginTop: parseFloat(style.marginTop),
+          // Stacco reale dalla seconda riga della toolbar: il badge vive dentro
+          // il wrapper space-y-1.5, quindi la spaziatura arriva dal genitore.
+          gapFromToolbar: Math.round(
+            el.getBoundingClientRect().top -
+              document.getElementById('btn-save-project').parentElement.getBoundingClientRect().bottom
+          ),
           iconColor: getComputedStyle(el.querySelector('span')).color,
           truncated: style.overflow === 'hidden' && style.textOverflow === 'ellipsis',
           // Riferimenti: un campione con le stesse classi Tailwind, così il
@@ -640,8 +649,9 @@ const main = async () => {
         badgeAfterSave.fontWeight >= 600 &&
         badgeAfterSave.background === badgeAfterSave.ref.background &&
         badgeAfterSave.borderColor === badgeAfterSave.ref.borderColor &&
-        badgeAfterSave.marginTop === 6,
-      `font ${badgeAfterSave.fontSize} ${badgeAfterSave.fontWeight}, bg ${badgeAfterSave.background} (slate-50), bordo ${badgeAfterSave.borderColor} (slate-200), mt ${badgeAfterSave.marginTop} px`
+        // 6 px di stacco dalla toolbar a icone (`space-y-1.5` del wrapper).
+        badgeAfterSave.gapFromToolbar === 6,
+      `font ${badgeAfterSave.fontSize} ${badgeAfterSave.fontWeight}, bg ${badgeAfterSave.background} (slate-50), bordo ${badgeAfterSave.borderColor} (slate-200), stacco ${badgeAfterSave.gapFromToolbar} px`
     );
     check(
       'Badge: icona 📄 blu e tooltip col nome del file attivo',

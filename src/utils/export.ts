@@ -64,8 +64,11 @@ export const EXPORT_PIXEL_RATIO = 2;
  * Area massima (px²) concessa al canvas di lavoro: limite prudenziale che evita
  * di superare i tetti di canvas dei browser (soprattutto Safari/iOS) quando il
  * rapporto d'aspetto del mezzo è molto allungato (bilico da 13,60 m).
+ *
+ * È condivisa con l'esportazione PDF diretta (`utils/pdfExport.ts`), che
+ * rasterizza lo stesso snapshot in JPEG e deve rispettare lo stesso tetto.
  */
-const MAX_CANVAS_AREA = 64_000_000;
+export const MAX_CANVAS_AREA = 64_000_000;
 
 /** Margine di sicurezza aggiunto sotto l'ultimo collo, per non tagliarlo (cm). */
 export const BOTTOM_MARGIN_CM = 50;

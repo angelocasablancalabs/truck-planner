@@ -46,8 +46,17 @@ import { join, resolve } from 'node:path';
  * Tailwind v4 esprime i colori in `oklch(…)`: i controlli cromatici accettano
  * sia la notazione moderna sia i corrispondenti valori RGB storici.
  */
-const VERDE_600 = ['oklch(0.627 0.194 149.214)', 'rgb(22, 163, 74)'];
-const BLU_600 = ['oklch(0.546 0.245 262.881)', 'rgb(37, 99, 235)'];
+/**
+ * Verde `emerald-600` di Tailwind v4: colore dell'icona `Salva` quando il
+ * feedback `Salvato!` è acceso (con il fallback RGB).
+ */
+const VERDE_600 = ['oklch(0.596 0.145 163.225)', 'rgb(5, 150, 105)'];
+/**
+ * Ardesia `slate-600` di Tailwind v4: tinta **istituzionale uniforme** delle sei
+ * icone della toolbar (con il fallback RGB). Sostituisce i vecchi accenti
+ * cromatici per-pulsante: l'unico colore acceso resta il feedback dinamico.
+ */
+const ARDESIA_600 = ['oklch(0.446 0.043 257.281)', 'rgb(71, 85, 105)'];
 
 /** Targa digitata in sidebar: 19 caratteri, contiene spazi (→ `_` nel nome file). */
 const PLATE_SAVED = 'XA111NJ COME ARRIVA';
@@ -331,9 +340,9 @@ const SNAPSHOT = `
     noteCount: notes.length,
     density: density ? density.textContent.trim() : null,
     sidebarTotal: total ? Number(total[1]) : -1,
-    saveLabel: saveBtn ? saveBtn.textContent.trim() : null,
+    saveLabel: saveBtn ? (saveBtn.querySelector('span.sr-only')?.textContent || '').trim() : null,
     saveLabelColor: saveBtn
-      ? getComputedStyle(saveBtn.querySelector('span')).color
+      ? getComputedStyle(saveBtn.querySelector('svg')).color
       : null,
     selectedPanel: !!document.getElementById('btn-add-side-note'),
     canUndo: !document.getElementById('btn-undo')?.disabled,
@@ -442,6 +451,15 @@ const main = async () => {
       const open = document.getElementById('btn-open-project');
       const input = document.getElementById('project-file-input');
       const bar = save?.parentElement;
+      // Testo VISIBILE: tutto ciò che non vive dentro uno span.sr-only.
+      const visibleText = (btn) =>
+        btn
+          ? Array.from(btn.childNodes)
+              .filter((n) => n.nodeType === 3 || !(n.classList && n.classList.contains('sr-only')))
+              .map((n) => n.textContent || '')
+              .join('')
+              .trim()
+          : null;
       return {
         hasSave: !!save,
         hasOpen: !!open,
@@ -455,55 +473,54 @@ const main = async () => {
         openText: open?.querySelector('span')?.textContent?.trim() ?? null,
         saveTextClass: save?.querySelector('span')?.className ?? null,
         openTextClass: open?.querySelector('span')?.className ?? null,
+        saveVisibleText: visibleText(save),
+        openVisibleText: visibleText(open),
         openIconColor: open ? getComputedStyle(open.querySelector('svg')).color : null,
       };
     `);
 
     check(
-      'Sidebar: pulsanti `Salva Piano` e `Apri Piano` presenti sotto la barra azioni',
+      'Sidebar: pulsanti `Salva` e `Apri Piano` presenti nella toolbar a icone',
       commands.hasSave && commands.hasOpen
     );
     check(
-      'Riga comandi compatta `grid grid-cols-2 gap-2 mt-2`',
-      commands.gridClass.includes('grid-cols-2') &&
-        commands.gridClass.includes('gap-2') &&
-        commands.gridClass.includes('mt-2'),
+      'Riga comandi compatta: `grid grid-cols-3 gap-1.5` (tre icone uniformi per riga)',
+      commands.gridClass.includes('grid-cols-3') &&
+        commands.gridClass.includes('gap-1.5'),
       commands.gridClass
     );
     check(
-      'Etichette: `Salva Piano` e `Apri Piano` (`text-xs font-semibold`)',
-      commands.saveText === 'Salva Piano' &&
+      'Etichette accessibili `sr-only`: `Salva` e `Apri Piano` (nessun testo visibile)',
+      commands.saveText === 'Salva' &&
         commands.openText === 'Apri Piano' &&
-        commands.saveTextClass.includes('text-xs') &&
-        commands.saveTextClass.includes('font-semibold') &&
-        commands.openTextClass.includes('text-xs') &&
-        commands.openTextClass.includes('font-semibold') &&
-        commands.openTextClass.includes('text-slate-800'),
+        commands.saveTextClass.includes('sr-only') &&
+        commands.openTextClass.includes('sr-only') &&
+        commands.saveVisibleText === '' &&
+        commands.openVisibleText === '',
       `"${commands.saveText}" / "${commands.openText}" (${commands.openTextClass})`
     );
     check(
-      'Icona `FolderOpen` blu (`text-blue-600`) sul pulsante `Apri Piano`',
-      BLU_600.includes(commands.openIconColor),
+      'Icona `FolderOpen` in ardesia istituzionale (`text-slate-600`) sul pulsante `Apri Piano`',
+      ARDESIA_600.includes(commands.openIconColor),
       `colore icona ${commands.openIconColor}`
     );
     const SAVE_BUTTON_CLASSES = [
-      'bg-slate-50',
-      'hover:bg-slate-100',
+      'h-9',
+      'bg-white',
+      'hover:bg-slate-50',
       'border',
       'border-slate-200',
       'text-slate-700',
-      'py-1.5',
-      'px-2',
       'rounded',
       'flex',
       'items-center',
       'justify-center',
-      'gap-1.5',
       'transition',
       'cursor-pointer',
+      'shadow-xs',
     ];
     check(
-      'Stile sobrio richiesto su `Salva Piano` (sfondo, bordo, padding, transizione)',
+      'Stile sobrio richiesto sull\'icona `Salva` (altezza, sfondo, bordo, transizione)',
       SAVE_BUTTON_CLASSES.every((cls) => commands.saveClass.split(/\s+/).includes(cls)),
       commands.saveClass
     );
@@ -654,8 +671,8 @@ const main = async () => {
     await sleep(SAVE_FEEDBACK_MS + 400);
     const afterFeedback = await cdp.eval(SNAPSHOT);
     check(
-      'Il feedback `Salvato!` si spegne da solo e il pulsante torna `Salva Piano`',
-      afterFeedback.saveLabel === 'Salva Piano',
+      'Il feedback `Salvato!` si spegne da solo e l\'icona `Salva` torna a riposo',
+      afterFeedback.saveLabel === 'Salva',
       `etichetta dopo ${SAVE_FEEDBACK_MS + 400} ms: "${afterFeedback.saveLabel}"`
     );
 

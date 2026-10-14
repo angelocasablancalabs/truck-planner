@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "app": "truck-planner",
+  "timestamp": "2026-04-01T07:30:00.000Z",
+  "vehicle": {
+    "id": "bilico_cc",
+    "name": "Bilico frigo Fiori",
+    "width": 250,
+    "length": 1328
+  },
+  "plate": "UNIT9",
+  "items": [
+    {
+      "id": "INDU_fixture_0",
+      "code": "INDU",
+      "name": "PRODIVA",
+      "width": 120,
+      "length": 100,
+      "x": 0,
+      "y": 0,
+      "rotation": 90,
+      "color": "#E2E8F0",
+      "borderColor": "#334155"
+    },
+    {
+      "id": "INDU_fixture_1",
+      "code": "INDU",
+      "name": "PRODIVA",
+      "width": 120,
+      "length": 100,
+      "x": 120,
+      "y": 0,
+      "rotation": 90,
+      "color": "#E2E8F0",
+      "borderColor": "#334155"
+    },
+    {
+      "id": "INDU_fixture_2",
+      "code": "INDU",
+      "name": "COOP",
+      "width": 120,
+      "length": 100,
+      "x": 0,
+      "y": 100,
+      "rotation": 90,
+      "color": "#E2E8F0",
+      "borderColor": "#334155"
+    }
+  ],
+  "notes": [],
+  "labelDensity": "all"
+}

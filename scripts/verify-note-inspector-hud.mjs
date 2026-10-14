@@ -295,6 +295,9 @@ const main = async () => {
      *  1) COLLO SELEZIONATO → ITEM INSPECTOR IN ALTO A SINISTRA
      * =================================================================== */
     await clickSelector(cdp, '#quick-piatto-EUR');
+    // L'aggiunta NON auto-seleziona più il collo: la card compare solo dopo
+    // una selezione esplicita sul pianale.
+    await clickItem(cdp, await cdp.eval(`return window.__items()[0].id;`));
     const withItem = await cdp.eval(`
       const item = window.__inspector();
       const canvas = document.querySelector('.canvas-hud').parentElement.getBoundingClientRect();
@@ -377,9 +380,8 @@ const main = async () => {
       `gap ${withNote.noteTopGap}px, left Δ ${withNote.noteLeftDelta}px`
     );
     check(
-      'Il pannello è "Nota Laterale Selezionata" con badge coordinate',
-      withNote.header.includes('Nota Laterale Selezionata') &&
-        /X [\d.-]+ · Y [\d.-]+ cm/.test(withNote.header),
+      'Il pannello è "Nota Laterale Selezionata"',
+      withNote.header.includes('Nota Laterale Selezionata'),
       withNote.header.slice(0, 90)
     );
     check(

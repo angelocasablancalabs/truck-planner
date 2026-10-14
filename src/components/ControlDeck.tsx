@@ -11,6 +11,7 @@ import type {
 import { VEHICLE_PRESETS, PALLET_CATALOG, CUSTOM_PALLET, COLOR_FAMILIES } from '../constants';
 import type { ColorFamily } from '../constants';
 import { copyCanvasToClipboard } from '../utils/export';
+import { exportCleanPianoToPdf } from '../utils/pdfExport';
 import { PLATE_INPUT_ID, PLATE_MAX_LENGTH } from '../utils/plateBadge';
 import {
   isOpenPickerSupported,
@@ -31,10 +32,59 @@ import {
   Check,
   Printer,
   Download,
+  Save,
+  SaveAll,
   FolderOpen,
+  FilePlus,
   Undo2,
   Redo2,
 } from 'lucide-react';
+
+/**
+ * Icona "PDF" disegnata a mano nello **stesso stile delle icone Lucide**
+ * (griglia 24×24, stroke 2 px, `currentColor`): sagoma del foglio con la piega
+ * dell'angolo in alto a destra e, al posto delle righe di testo, il badge con la
+ * dicitura geometrica `PDF`.
+ *
+ * Serve a rendere immediatamente riconoscibile il comando "Scarica PDF Solo
+ * Grafica" senza ricorrere a un accento cromatico: come le altre cinque icone
+ * della toolbar eredita il grigio ardesia istituzionale (`text-slate-600`).
+ *
+ * Il badge è un rettangolo `fill="currentColor"` con il testo in bianco puro e
+ * `stroke="none"`, così la scritta resta nitida e non viene "sporcata" dal
+ * contorno ereditato dal gruppo.
+ */
+const PdfFileIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+    focusable="false"
+  >
+    {/* Sagoma foglio con piega */}
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    {/* Badge con dicitura PDF */}
+    <rect x="5.5" y="12" width="13" height="7" rx="1.5" fill="currentColor" stroke="none" />
+    <text
+      x="12"
+      y="17.2"
+      textAnchor="middle"
+      fontSize="5"
+      fontWeight="900"
+      fontFamily="system-ui, -apple-system, sans-serif"
+      fill="#FFFFFF"
+      stroke="none"
+    >
+      PDF
+    </text>
+  </svg>
+);
 
 /** Esito dell'ultima esportazione immagine (feedback temporaneo sul pulsante). */
 type CopyFeedback = 'idle' | 'copied' | 'downloaded';
@@ -105,6 +155,14 @@ interface ControlDeckProps {
    * `Ctrl / Cmd + S` riscrive in-place quel file.
    */
   onSaveProject: () => Promise<{ fileName: string; isNewFile: boolean } | null>;
+  /**
+   * **"Salva con nome"**: salva il piano su un nuovo file anche quando un file
+   * attivo è già agganciato (selettore nativo `showSaveFilePicker`, o download
+   * di una nuova copia sui browser che non lo supportano). Il risultato è già
+   * riflesso nello stato di `App.tsx` (badge del file attivo e feedback
+   * `Salvato!`), quindi la plancia non ne ha bisogno: `null` = annullato.
+   */
+  onSaveProjectAs: () => Promise<{ fileName: string; isNewFile: boolean } | null>;
   onLoadProject: (
     project: ProjectFile,
     handle: FileSystemFileHandle | null,
@@ -121,6 +179,10 @@ interface ControlDeckProps {
   savedFileName: string | null;
   onAddItem: (pallet: PalletDefinition, options?: AddItemOptions) => void;
   onClearAll: () => void;
+  /** Avvia un nuovo piano di carico azzerando tutto. */
+  onNewProject: () => void;
+  /** Indica se sono presenti modifiche non ancora salvate su disco. */
+  hasUnsavedChanges?: boolean;
   /**
    * Cronologia Undo / Redo: stato delle due pile e azioni esposte dal motore di
    * `App.tsx` (i micro-pulsanti dell'header e le scorciatoie le condividono).
@@ -147,6 +209,10 @@ interface ControlDeckProps {
   items: PlacedItem[];
   /** Densità etichette attiva: viene applicata anche allo snapshot esportato. */
   labelDensity: LabelDensity;
+  /** ID dei colli attualmente selezionati sul pianale. */
+  selectedItemIds?: string[];
+  /** ID della nota laterale attualmente selezionata, se presente. */
+  selectedNoteId?: string | null;
 }
 
 export const ControlDeck: React.FC<ControlDeckProps> = ({
@@ -155,12 +221,15 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   plate,
   onUpdatePlate,
   onSaveProject,
+  onSaveProjectAs,
   onLoadProject,
   activeFileName,
   isProjectSaved,
   savedFileName,
   onAddItem,
   onClearAll,
+  onNewProject,
+  hasUnsavedChanges,
   canUndo,
   canRedo,
   onUndo,
@@ -169,6 +238,8 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   notes,
   items,
   labelDensity,
+  selectedItemIds,
+  selectedNoteId,
 }) => {
   const [bulkLength, setBulkLength] = useState<number>(2.0); // Metri per lo sfuso
   // Accordion multifunzione del catalogo colli: al massimo un cassetto aperto.
@@ -186,10 +257,27 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   const [isBulkOpen, setIsBulkOpen] = useState<boolean>(false);
   const [isCustomOpen, setIsCustomOpen] = useState<boolean>(false);
 
+  // Chiude automaticamente qualsiasi cassetto aperto nel catalogo non appena
+  // l'utente seleziona uno o più colli o una nota sul pianale, evitando la
+  // duplicazione visiva della palette colori tra sidebar e floating HUD.
+  useEffect(() => {
+    const hasSelection = (selectedItemIds && selectedItemIds.length > 0) || Boolean(selectedNoteId);
+    if (hasSelection) {
+      setOpenPalletCode(null);
+      setIsBulkOpen(false);
+      setIsCustomOpen(false);
+    }
+  }, [selectedItemIds, selectedNoteId]);
+
   // --- Condivisione & Output (Sprint D) -----------------------------------
   // Esito dell'ultima esportazione: alimenta il feedback temporaneo del pulsante.
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>('idle');
   const [isCopying, setIsCopying] = useState<boolean>(false);
+  // Esportazione PDF diretta in corso: il pulsante resta disabilitato finché il
+  // canvas non ha finito di rasterizzare lo snapshot (mezzo secondo circa).
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  // Guardiano anti doppio click, attivo già nel primo giro di eventi.
+  const exportingPdfRef = useRef<boolean>(false);
   // Timer di reset del feedback: si spegne da solo dopo 2,5 secondi.
   const copyFeedbackTimer = useRef<number | null>(null);
 
@@ -211,6 +299,19 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
   };
 
   /**
+   * Protezione antipanico: prima di **sostituire** il piano in scena (nuovo
+   * piano o apertura di un file) verifica che non ci siano modifiche non ancora
+   * scritte su disco. Restituisce `true` quando l'operazione può procedere —
+   * nessuna modifica in sospeso oppure conferma esplicita dell'operatore.
+   */
+  const confirmDiscardUnsaved = (): boolean => {
+    if (!hasUnsavedChanges) return true;
+    return window.confirm(
+      'Ci sono modifiche non salvate sul piano corrente.\nVuoi aprire un altro file e perdere le modifiche non salvate?'
+    );
+  };
+
+  /**
    * Apre un piano di carico.
    *
    * Con la File System Access API (Chrome / Edge) si usa il selettore nativo
@@ -220,6 +321,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
    * Se l'operatore annulla la finestra nativa (`AbortError`) non succede nulla.
    */
   const handleOpenProjectPicker = async () => {
+    // Antipanico: nessun file viene aperto (e nessuna finestra di sistema si
+    // apre) se l'operatore rinuncia a perdere le modifiche non salvate.
+    if (!confirmDiscardUnsaved()) return;
+
     if (!isOpenPickerSupported()) {
       // Fallback trasparente: selettore file classico del sistema operativo.
       projectInputRef.current?.click();
@@ -251,6 +356,10 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     // Il campo viene svuotato subito: lo stesso file resta riselezionabile.
     event.target.value = '';
     if (!file) return;
+
+    // Antipanico: la lettura del file — e quindi la sostituzione del piano in
+    // scena — parte solo dopo la conferma dell'operatore.
+    if (!confirmDiscardUnsaved()) return;
 
     try {
       const project = await parseProjectFile(file);
@@ -398,7 +507,11 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
     return acc;
   }, {} as Record<string, number>);
 
-  // Etichetta, icona e stile del pulsante di esportazione immagine.
+  /**
+   * Etichetta accessibile (`sr-only`), icona e stile del pulsante "Copia
+   * Immagine": la toolbar è a sole icone, quindi l'esito dell'esportazione
+   * resta leggibile da screen reader e dai tooltip.
+   */
   const copyLabel =
     copyFeedback === 'copied'
       ? 'Copiato!'
@@ -406,113 +519,226 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
         ? 'PNG salvato'
         : 'Copia Immagine';
   const CopyIcon = copyFeedback === 'copied' ? Check : copyFeedback === 'downloaded' ? Download : Copy;
-  const copyButtonClass =
+  const copyTooltip =
     copyFeedback === 'copied'
-      ? 'border-green-300 bg-green-50 text-green-700'
+      ? 'Immagine copiata negli appunti!'
+      : copyFeedback === 'downloaded'
+        ? 'Appunti non disponibili: immagine PNG scaricata nella cartella Download'
+        : 'Copia immagine negli appunti (PNG per WhatsApp o Mail)';
+  /**
+   * Contenitore del pulsante "Copia Immagine": identico agli altri cinque della
+   * toolbar (`bg-white hover:bg-slate-50 border-slate-200`), con l'accento
+   * **solo** negli esiti dinamici — verde quando l'immagine è negli appunti,
+   * ambra quando il browser ha negato l'accesso e il PNG è stato scaricato.
+   */
+  const clipboardButtonClass =
+    copyFeedback === 'copied'
+      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
       : copyFeedback === 'downloaded'
         ? 'border-amber-300 bg-amber-50 text-amber-700'
-        : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400 hover:bg-blue-50';
+        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900';
+  /**
+   * Tinta dell'icona di "Copia Immagine": a riposo è l'**ardesia istituzionale**
+   * condivisa dalle altre cinque icone della toolbar (`text-slate-600`, hover
+   * `hover:text-slate-900`); solo gli esiti dinamici accendono un accento —
+   * verde quando l'immagine è negli appunti, ambra quando è stato necessario
+   * scaricare il PNG perché il browser ha negato l'accesso agli appunti.
+   */
+  const clipboardIconClass =
+    copyFeedback === 'copied'
+      ? 'text-emerald-600'
+      : copyFeedback === 'downloaded'
+        ? 'text-amber-600'
+        : 'text-slate-600 hover:text-slate-900';
+
+  /**
+   * Esporta il disegno del pianale (veicolo, colli, quote, targa e note) in un
+   * PDF A4 pulito, senza intestazione né tabella dei totali, e lo scarica
+   * direttamente nella cartella Download.
+   *
+   * Il guardiano `ref` blocca il doppio click **prima** che React abbia
+   * ridisegnato il pulsante come disabilitato: senza di esso due click rapidi
+   * farebbero partire due rasterizzazioni e due download.
+   */
+  const handleExportPdf = async () => {
+    if (exportingPdfRef.current) return;
+    exportingPdfRef.current = true;
+    setIsExportingPdf(true);
+    try {
+      await exportCleanPianoToPdf(vehicle, items, labelDensity, notes, plate);
+    } catch (error) {
+      console.error('[ControlDeck] Esportazione PDF non riuscita:', error);
+      window.alert('Impossibile generare il PDF.');
+    } finally {
+      exportingPdfRef.current = false;
+      setIsExportingPdf(false);
+    }
+  };
 
   return (
     <div className="control-deck print:hidden w-full h-full bg-white border-l border-slate-200 flex flex-col p-4 overflow-y-auto [scrollbar-gutter:stable] space-y-3.5">
-      {/* Header */}
-      <div className="border-b border-slate-200 pb-2">
-        <h1 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-          <Truck className="w-6 h-6 text-blue-600" />
-          TRUCK PLANNER
-        </h1>
-        <p className="text-xs text-slate-500 font-medium">Gestione Carico CAD Vettoriale</p>
-      </div>
-
-      {/* Barra comandi rapida: Copia Immagine (PNG) + Stampa / PDF */}
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          type="button"
-          id="btn-copy-image"
-          onClick={handleCopyImage}
-          disabled={isCopying}
-          aria-live="polite"
-          title="Copia il pianale negli appunti come immagine PNG ad alta risoluzione"
-          className={`flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-60 disabled:cursor-wait ${copyButtonClass}`}
-        >
-          <CopyIcon className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{copyLabel}</span>
-        </button>
+      {/* Header con Titolo (col-span-2) e Pulsante "Nuovo" (col-span-1, allineato al pixel) */}
+      <div className="grid grid-cols-3 gap-1.5 items-center border-b border-slate-200 pb-2">
+        <div className="col-span-2 min-w-0 pr-1">
+          <h1 className="text-lg font-black text-slate-800 tracking-tight flex items-center gap-1.5 truncate">
+            <Truck className="w-5 h-5 text-blue-600 shrink-0" />
+            <span className="truncate">TRUCK PLANNER</span>
+          </h1>
+          <p className="text-[11px] text-slate-500 font-medium truncate">
+            Gestione Carico CAD Vettoriale
+          </p>
+        </div>
 
         <button
           type="button"
-          id="btn-print-report"
-          onClick={() => window.print()}
-          title="Stampa la scheda di carico A4 o salvala in PDF"
-          className="flex items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+          id="btn-new-project"
+          onClick={onNewProject}
+          title="Nuovo Piano (azzera tutto e ripristina mezzo di default)"
+          className="col-span-1 h-9 flex items-center justify-center gap-1.5 rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs font-semibold text-xs"
         >
-          <Printer className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">Stampa / PDF</span>
+          <FilePlus className="w-4 h-4 text-slate-600 shrink-0" />
+          <span className="truncate">Nuovo</span>
         </button>
       </div>
 
-      {/* Backup, ripristino e condivisione del lavoro: salva il piano di carico
-          in un file `.json` e riapre un piano salvato in precedenza. */}
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          type="button"
-          id="btn-save-project"
-          onClick={handleSaveProject}
-          aria-live="polite"
-          title={
-            isProjectSaved && savedFileName
-              ? `File salvato: ${savedFileName}`
-              : 'Salva modifiche (Ctrl / Cmd + S)'
-          }
-          className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-1.5 px-2 rounded flex items-center justify-center gap-1.5 transition cursor-pointer"
-        >
-          <Download className="w-3.5 h-3.5 shrink-0" />
-          <span
-            className={`text-xs font-semibold truncate ${
-              isProjectSaved ? 'text-green-600' : ''
+      {/* --- Toolbar Comandi: 2 righe × 3 colonne a sole icone --------------- *
+       *  Riga 1 · Gestione File `.json`: salvataggio in-place (`Ctrl / Cmd + S`),
+       *  "Salva con nome" su una nuova copia e apertura di un piano `.json`.
+       *  Riga 2 · Output & Condivisione: copia dell'immagine negli appunti,
+       *  PDF della sola grafica (senza intestazione né totali) e stampa della
+       *  scheda tecnica A4 completa.
+       *  Ogni pulsante è una sola icona da 16 px: il testo descrittivo vive nel
+       *  `title` (tooltip esaustivo) e in uno `span.sr-only` per gli screen
+       *  reader — nessuna etichetta visibile, larghezza uniforme su 3 colonne.
+       *  **Colori uniformi**: tutte e sei le icone condividono l'ardesia
+       *  istituzionale `text-slate-600` con hover `hover:text-slate-900`;
+       *  l'unico accento cromatico ammesso è il **feedback dinamico** — verde
+       *  `text-emerald-600` su `Copia Immagine` (immagine copiata) e su `Salva`
+       *  (piano scritto su disco). Il comando PDF si riconosce dalla sagoma con
+       *  il badge `PDF` (`PdfFileIcon`), non da un colore diverso. */}
+      <div className="space-y-1.5">
+        {/* Riga 1: Gestione File .json (Salva, Salva con nome, Apri) */}
+        <div className="grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            id="btn-save-project"
+            onClick={handleSaveProject}
+            aria-live="polite"
+            title={
+              isProjectSaved && savedFileName
+                ? `Salvato su ${savedFileName}!`
+                : activeFileName
+                  ? `Salva modifiche su ${activeFileName} (Ctrl / Cmd + S)`
+                  : 'Salva piano di carico (Ctrl / Cmd + S)'
+            }
+            className={`h-9 flex items-center justify-center rounded border transition cursor-pointer shadow-xs ${
+              isProjectSaved
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
             }`}
           >
-            {isProjectSaved ? 'Salvato!' : 'Salva Piano'}
-          </span>
-        </button>
+            <Save
+              className={`w-4 h-4 ${
+                isProjectSaved ? 'text-emerald-600' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            />
+            <span className="sr-only">{isProjectSaved ? 'Salvato!' : 'Salva'}</span>
+          </button>
 
-        <button
-          type="button"
-          id="btn-open-project"
-          onClick={handleOpenProjectPicker}
-          title="Apri un piano di carico salvato in precedenza (file .json)"
-          className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 py-1.5 px-2 rounded flex items-center justify-center gap-1.5 transition cursor-pointer"
-        >
-          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-blue-600" />
-          <span className="text-xs font-semibold text-slate-800 truncate">Apri Piano</span>
-        </button>
+          <button
+            type="button"
+            id="btn-save-as-project"
+            onClick={() => void onSaveProjectAs()}
+            title="Salva con nome (crea una nuova copia del file JSON)"
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs"
+          >
+            <SaveAll className="w-4 h-4 text-slate-600 hover:text-slate-900" />
+            <span className="sr-only">Salva con nome</span>
+          </button>
 
-        {/* Selettore file classico, invisibile: usato come **fallback trasparente**
-            sui browser senza File System Access API, convalidato da `parseProjectFile`. */}
-        <input
-          ref={projectInputRef}
-          id="project-file-input"
-          type="file"
-          accept=".json,application/json"
-          onChange={handleProjectFileChange}
-          className="hidden"
-        />
-      </div>
+          <button
+            type="button"
+            id="btn-open-project"
+            onClick={handleOpenProjectPicker}
+            title="Apri Piano (carica un piano di carico `.json` salvato in precedenza)"
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs"
+          >
+            <FolderOpen className="w-4 h-4 text-slate-600 hover:text-slate-900" />
+            <span className="sr-only">Apri Piano</span>
+          </button>
 
-      {/* File attivo: badge compatto e ben visibile subito sotto `Salva Piano` /
-          `Apri Piano`. Viene acceso sia all'apertura di un piano, sia dopo il
-          primo salvataggio — anche nel fallback di download classico, dove
-          `App.tsx` riporta il nome del file generato (`piano-<TARGA>-<data>.json`). */}
-      {activeFileName !== null && (
-        <div
-          id="active-file-badge"
-          className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono text-slate-700 truncate mt-1.5"
-          title={`File attualmente aperto: ${activeFileName}`}
-        >
-          <span className="text-blue-600 flex-shrink-0">📄</span>
-          <span className="truncate font-semibold text-slate-800">{activeFileName}</span>
+          {/* Selettore file classico, invisibile: usato come **fallback trasparente**
+              sui browser che non supportano la File System Access API, convalidato
+              da `parseProjectFile`. */}
+          <input
+            ref={projectInputRef}
+            id="project-file-input"
+            type="file"
+            accept=".json,application/json"
+            onChange={handleProjectFileChange}
+            className="hidden"
+          />
         </div>
-      )}
+
+        {/* Riga 2: Output & Condivisione (Copia, PDF, Stampa) */}
+        <div className="grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            id="btn-copy-image"
+            onClick={handleCopyImage}
+            disabled={isCopying}
+            aria-live="polite"
+            title={copyTooltip}
+            className={`h-9 flex items-center justify-center rounded border transition cursor-pointer shadow-xs disabled:opacity-60 disabled:cursor-wait ${clipboardButtonClass}`}
+          >
+            <CopyIcon className={`w-4 h-4 ${clipboardIconClass}`} />
+            <span className="sr-only">{copyLabel}</span>
+          </button>
+
+          <button
+            type="button"
+            id="btn-export-pdf"
+            onClick={() => void handleExportPdf()}
+            disabled={isExportingPdf}
+            aria-busy={isExportingPdf}
+            title={
+              isExportingPdf
+                ? 'Generazione del PDF in corso…'
+                : 'Scarica PDF Solo Grafica (disegno del carico pulito, con targa e note)'
+            }
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs disabled:opacity-60 disabled:cursor-progress"
+          >
+            <PdfFileIcon className="w-4 h-4 text-slate-600 hover:text-slate-900" />
+            <span className="sr-only">PDF Solo Grafica</span>
+          </button>
+
+          <button
+            type="button"
+            id="btn-print-report"
+            onClick={() => window.print()}
+            title="Stampa Piano (scheda tecnica A4 completa di intestazione e riepilogo)"
+            className="h-9 flex items-center justify-center rounded border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900 transition cursor-pointer shadow-xs"
+          >
+            <Printer className="w-4 h-4 text-slate-600 hover:text-slate-900" />
+            <span className="sr-only">Stampa Piano</span>
+          </button>
+        </div>
+
+        {/* File attivo: badge compatto e ben visibile subito sotto l'ultima
+            riga della toolbar. Viene acceso sia all'apertura di un piano, sia
+            dopo il primo salvataggio — anche nel fallback di download classico,
+            dove `App.tsx` riporta il nome generato (`piano-<TARGA>-<data>.json`). */}
+        {activeFileName !== null && (
+          <div
+            id="active-file-badge"
+            className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-[11px] font-mono text-slate-700 truncate"
+            title={`File attualmente aperto: ${activeFileName}`}
+          >
+            <span className="text-blue-600 flex-shrink-0">📄</span>
+            <span className="truncate font-semibold text-slate-800">{activeFileName}</span>
+          </div>
+        )}
+      </div>
 
       {/* Configurazione Mezzo / Targa: blocco unico e compatto (space-y-1 fra
           etichetta e input) per massimizzare la densità verticale. */}

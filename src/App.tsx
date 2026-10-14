@@ -124,6 +124,36 @@ export default function App() {
   const [savedFileName, setSavedFileName] = useState<string | null>(null);
   const saveFeedbackTimer = useRef<number | null>(null);
 
+  /* ------------------------------------------------------------------------ *
+   *  PROTEZIONE DALLA CHIUSURA ACCIDENTALE DELLA SCHEDA
+   *
+   *  `hasUnsavedChanges` tiene traccia del fatto che in scena ci sia lavoro
+   *  **non ancora scritto su disco**: viene acceso a ogni mutazione del piano
+   *  (colli, note, mezzo e targa) e rispettivamente spento al salvataggio andato
+   *  a buon fine e all'apertura di un piano da file. Finché resta acceso il
+   *  browser mostra il proprio popup nativo di conferma su `beforeunload` (F5,
+   *  chiusura scheda, chiusura finestra), evitando la perdita silenziosa della
+   *  stiva appena composta.
+   *
+   *  Nota: i browser ignorano il testo personalizzato del messaggio — il popup
+   *  è di sistema — ma la conferma viene mostrata solo se `returnValue` è
+   *  impostato, quindi entrambe le righe servono.
+   * ------------------------------------------------------------------------ */
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        // Imposta returnValue per forzare il popup nativo di conferma del browser
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   useEffect(
     () => () => {
       if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
@@ -172,6 +202,10 @@ export default function App() {
   const pushSnapshot = useCallback((snapshot: HistorySnapshot) => {
     setPast((prev) => appendSnapshot(prev, cloneSnapshot(snapshot)));
     setFuture([]);
+    // Ogni fotogramma nasce da una mutazione intenzionale del piano (aggiunta,
+    // spostamento, rotazione, ricolorazione, cancellazione o nota): da qui in
+    // avanti il lavoro in scena non coincide più con il file su disco.
+    setHasUnsavedChanges(true);
   }, []);
 
   /**
@@ -194,6 +228,9 @@ export default function App() {
     if (!changed || !snapshot) return;
     setPast((prev) => appendSnapshot(prev, snapshot));
     setFuture([]);
+    // Trascinamento concluso con uno spostamento reale: stessa regola di
+    // `pushSnapshot` (il fotogramma qui è solo differito al `pointerUp`).
+    setHasUnsavedChanges(true);
   }, []);
 
   /** Ripristina uno snapshot completo in scena, ripulendo le selezioni orfane. */
@@ -237,6 +274,24 @@ export default function App() {
     setSelectedItemIds(ids);
   }, []);
 
+  /**
+   * Cambio di configurazione del mezzo (preset di catalogo o dimensioni libere
+   * del mezzo personalizzato): il veicolo fa parte del piano di carico salvato
+   * su `.json`, quindi la modifica va segnalata come non salvata. La stessa
+   * regola vale per la targa, che finisce nel file di progetto, nel badge sopra
+   * la Cabina e nell'intestazione della scheda A4.
+   */
+  const handleSelectVehicle = useCallback((next: VehicleConfig) => {
+    setVehicle(next);
+    setHasUnsavedChanges(true);
+  }, []);
+
+  /** Aggiornamento della targa: campo del piano, quindi modifica non salvata. */
+  const handleUpdatePlate = useCallback((value: string) => {
+    setVehiclePlate(value);
+    setHasUnsavedChanges(true);
+  }, []);
+
   // Aggiungi un nuovo collo al pianale, nel primo slot libero disponibile
   const handleAddItem = (pallet: PalletDefinition, options: AddItemOptions = {}) => {
     // Fotogramma PRIMA della mutazione: l'aggiunta è un passo di Undo.
@@ -265,7 +320,10 @@ export default function App() {
     };
 
     setItems((prev) => [...prev, newItem]);
-    setSelectedItemIds([newItem.id]);
+    // Nessuna auto-selezione: il collo viene solo disegnato sul pianale e
+    // l'HUD resta pulito. La card fluttuante di ispezione (`ItemInspector`)
+    // comparirà solo quando l'utente selezionerà esplicitamente il collo.
+    setSelectedItemIds([]);
   };
 
   /**
@@ -495,18 +553,50 @@ export default function App() {
   }, [selectedItemIds, pushSnapshot, captureSnapshot]);
 
   /**
-   * Svuotamento completo del pianale ("Svuota"): un solo passo di Undo.
+   * Avvia un nuovo piano di carico da zero:
+   * - Chiede conferma se ci sono modifiche non salvate (`hasUnsavedChanges`);
+   * - Ripristina il mezzo di fabbrica (Bilico CC Fiori 13,28 m);
+   * - Sbianca la targa, i colli e le note laterali;
+   * - Sgancia il file attivo e azzera le pile di Undo/Redo.
+   */
+  const handleNewProject = useCallback(() => {
+    if (
+      hasUnsavedChanges &&
+      !window.confirm(
+        'Ci sono modifiche non salvate sul piano corrente.\nVuoi iniziare un nuovo piano e perdere le modifiche non salvate?'
+      )
+    ) {
+      return;
+    }
+
+    setVehicle(VEHICLE_PRESETS[0]);
+    setVehiclePlate('');
+    setItems([]);
+    setNotes([]);
+    setLabelDensity('all');
+    setSelectedItemIds([]);
+    setSelectedNoteId(null);
+    setFileHandle(null);
+    setActiveFileName(null);
+    setPast([]);
+    setFuture([]);
+    setHasUnsavedChanges(false);
+  }, [hasUnsavedChanges]);
+
+  /**
+   * Svuotamento del pianale ("Svuota"): un solo passo di Undo.
    *
-   * "Svuota" azzera il lavoro e avvia un piano nuovo: l'handle del file aperto
-   * viene **staccato** (e il nome attivo azzerato), così il primo `Ctrl / Cmd + S`
-   * del nuovo carico chiede un file nuovo invece di sovrascrivere il precedente.
+   * Azzera colli **e** note laterali — il lavoro caricato sul pianale — mentre
+   * mezzo e targa restano intatti: sono la configurazione del veicolo, non il
+   * carico, quindi non vengono toccati. Il file attivo resta agganciato: un
+   * `Ctrl / Cmd + S` successivo riscrive lo stesso file con il pianale vuoto.
    */
   const handleClearAll = useCallback(() => {
     pushSnapshot(captureSnapshot());
     setItems([]);
+    setNotes([]);
     setSelectedItemIds([]);
-    setFileHandle(null);
-    setActiveFileName(null);
+    setSelectedNoteId(null);
   }, [pushSnapshot, captureSnapshot]);
 
   /* ------------------------------------------------------------------------ *
@@ -553,6 +643,8 @@ export default function App() {
       // sovrascrittura l'handle è lo stesso, dopo un "Salva con nome" è il nuovo.
       setFileHandle(result.handle);
       setActiveFileName(result.fileName);
+      // Piano scritto su disco: il lavoro in scena torna allineato al file.
+      setHasUnsavedChanges(false);
 
       // Feedback verde `Salvato!` per 2 secondi, con il nome del file nel tooltip:
       // identico sia per il click sul pulsante sia per `Ctrl / Cmd + S`.
@@ -575,6 +667,63 @@ export default function App() {
       return null;
     }
   }, [vehicle, vehiclePlate, items, notes, labelDensity, fileHandle]);
+
+  /**
+   * "Salva con nome": salva il piano di carico su un **nuovo file**, anche
+   * quando un file attivo è già agganciato.
+   *
+   * Passando `null` come handle si forza sempre il selettore nativo
+   * `showSaveFilePicker` (o, sui browser che non lo supportano, il download
+   * classico di una nuova copia): il file precedente resta intatto e da quel
+   * momento `Ctrl / Cmd + S` riscrive in-place la nuova copia.
+   *
+   * Restituisce nome del file e natura dell'operazione, oppure `null` se
+   * l'operatore annulla il selettore o il salvataggio fallisce.
+   */
+  const handleSaveProjectAs = useCallback(async (): Promise<{
+    fileName: string;
+    isNewFile: boolean;
+  } | null> => {
+    const project: ProjectFile = {
+      version: 1,
+      app: 'truck-planner',
+      timestamp: new Date().toISOString(),
+      vehicle,
+      plate: vehiclePlate,
+      items,
+      notes,
+      labelDensity,
+    };
+
+    try {
+      // Passando `null` come handle si forza l'apertura della finestra
+      // "Salva con nome", anche con un file attivo già agganciato.
+      const result = await saveProjectWithHandle(project, null);
+      setFileHandle(result.handle);
+      setActiveFileName(result.fileName);
+      // Copia scritta su un nuovo file: nessuna modifica in sospeso.
+      setHasUnsavedChanges(false);
+
+      // Stesso feedback verde `Salvato!` del salvataggio in-place.
+      setSavedFileName(result.fileName);
+      setIsProjectSaved(true);
+      if (saveFeedbackTimer.current !== null) window.clearTimeout(saveFeedbackTimer.current);
+      saveFeedbackTimer.current = window.setTimeout(
+        () => setIsProjectSaved(false),
+        SAVE_FEEDBACK_MS
+      );
+
+      return { fileName: result.fileName, isNewFile: result.isNewFile };
+    } catch (error) {
+      // Annullamento volontario del selettore: nessun avviso, nessun file.
+      if (isPickerAbortError(error)) return null;
+
+      const message =
+        error instanceof Error ? error.message : 'Impossibile salvare il piano di carico.';
+      window.alert(`Salvataggio del piano non riuscito.\n\n${message}`);
+      return null;
+    }
+  }, [vehicle, vehiclePlate, items, notes, labelDensity]);
 
   /**
    * Apre un piano di carico salvato in precedenza e lo mette in scena.
@@ -603,6 +752,11 @@ export default function App() {
       // Il file attivo diventa quello appena aperto (handle compreso).
       setFileHandle(handle);
       setActiveFileName(fileName || null);
+
+      // Il piano in scena è **esattamente** il contenuto del file appena letto
+      // (il fotogramma registrato sopra lo ha acceso come non salvato): nessuna
+      // modifica in sospeso, quindi nessun avviso alla chiusura della scheda.
+      setHasUnsavedChanges(false);
 
       // Nessuna selezione orfana: le selezioni correnti vengono azzerate.
       setSelectedItemIds([]);
@@ -886,10 +1040,11 @@ export default function App() {
         <div className="w-80 md:w-96 h-full flex-shrink-0">
           <ControlDeck
             vehicle={vehicle}
-            onSelectVehicle={setVehicle}
+            onSelectVehicle={handleSelectVehicle}
             plate={vehiclePlate}
-            onUpdatePlate={setVehiclePlate}
+            onUpdatePlate={handleUpdatePlate}
             onSaveProject={handleSaveProject}
+            onSaveProjectAs={handleSaveProjectAs}
             onLoadProject={handleLoadProject}
             activeFileName={activeFileName}
             isProjectSaved={isProjectSaved}
@@ -897,6 +1052,8 @@ export default function App() {
             onAddItem={handleAddItem}
             onAddBatch={handleAddBatch}
             onClearAll={handleClearAll}
+            onNewProject={handleNewProject}
+            hasUnsavedChanges={hasUnsavedChanges}
             canUndo={canUndo}
             canRedo={canRedo}
             onUndo={handleUndo}
@@ -904,6 +1061,8 @@ export default function App() {
             notes={notes}
             items={items}
             labelDensity={labelDensity}
+            selectedItemIds={selectedItemIds}
+            selectedNoteId={selectedNoteId}
           />
         </div>
       </div>
