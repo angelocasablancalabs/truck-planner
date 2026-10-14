@@ -443,6 +443,11 @@ export const PrintReport: React.FC<PrintReportProps> = ({
           </div>
         </header>
 
+        {/* Timestamp discreto per la modalità Solo Grafica */}
+        <div className="print-clean-timestamp hidden text-[8pt] font-mono text-slate-400 w-full text-right pb-1">
+          {generatedLabel}
+        </div>
+
         {/* --- Disegno vettoriale del camion --------------------------------- */}
         <div className="print-drawing">
           <svg

@@ -38,19 +38,7 @@ import {
   Redo2,
 } from 'lucide-react';
 
-/**
- * Icona **`PrinterGraphicIcon`** — "Stampa Solo Grafica".
- *
- * Riprende la sagoma Lucide della stampante (`polyline` del coperchio, corpo con
- * la fessura d'uscita, `rect` del foglio) e vi sostituisce il contenuto del
- * foglio: al posto delle righe di testo compare un **simbolo grafico** — un
- * piccolo profilo a zig-zag con il punto di controllo in alto a destra — che
- * rende immediatamente riconoscibile il comando che manda in stampa (o salva in
- * PDF vettoriale leggero) il **solo disegno del pianale**.
- *
- * Come tutte le altre icone della toolbar eredita l'ardesia istituzionale
- * (`text-slate-600`) via `currentColor`, con `strokeWidth` 2 px come Lucide.
- */
+/** Stampante con riquadro immagine ad alto contrasto sul foglio superiore (Solo Grafica) */
 const PrinterGraphicIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
     viewBox="0 0 24 24"
@@ -63,22 +51,17 @@ const PrinterGraphicIcon: React.FC<{ className?: string }> = ({ className = 'w-4
     aria-hidden="true"
     focusable="false"
   >
+    {/* Foglio superiore con riquadro/foto geometrica ben visibile */}
     <polyline points="6 9 6 2 18 2 18 9" />
+    <rect x="8.5" y="3.5" width="7" height="4.5" rx="0.5" fill="currentColor" stroke="none" />
+    {/* Corpo stampante */}
     <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    {/* Vassoio inferiore pulito */}
     <rect x="6" y="14" width="12" height="8" />
-    <circle cx="15.5" cy="16.5" r="1" fill="currentColor" stroke="none" />
-    <polyline points="8 20 11 17 14 20" />
   </svg>
 );
 
-/**
- * Icona **`PrinterReportIcon`** — "Stampa Scheda Completa".
- *
- * Stessa sagoma della stampante, ma il foglio in uscita porta **due righe di
- * testo** (`line`) di lunghezza diversa: è il segno distintivo della scheda
- * tecnica A4 completa, con intestazione formale, targa e riepilogo colli.
- * Stesso stile Lucide (24×24, stroke 2 px, `currentColor`).
- */
+/** Stampante con 3 righe orizzontali di testo sul foglio superiore (Scheda Completa) */
 const PrinterReportIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg
     viewBox="0 0 24 24"
@@ -91,11 +74,16 @@ const PrinterReportIcon: React.FC<{ className?: string }> = ({ className = 'w-4 
     aria-hidden="true"
     focusable="false"
   >
+    {/* Foglio superiore con 3 righe di testo evidenti */}
     <polyline points="6 9 6 2 18 2 18 9" />
+    <line x1="8.5" y1="3.5" x2="15.5" y2="3.5" stroke="currentColor" strokeWidth="1.5" />
+    <line x1="8.5" y1="5.5" x2="15.5" y2="5.5" stroke="currentColor" strokeWidth="1.5" />
+    <line x1="8.5" y1="7.5" x2="13" y2="7.5" stroke="currentColor" strokeWidth="1.5" />
+    {/* Corpo stampante */}
     <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    {/* Vassoio inferiore con riga di documento */}
     <rect x="6" y="14" width="12" height="8" />
-    <line x1="9" y1="17" x2="15" y2="17" />
-    <line x1="9" y1="20" x2="13" y2="20" />
+    <line x1="9" y1="18" x2="15" y2="18" />
   </svg>
 );
 
@@ -577,11 +565,16 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
    * (annullamento compreso), così lo schermo non resta mai in stato "di stampa".
    */
   const triggerPrint = (mode: 'clean' | 'full') => {
+    const originalTitle = document.title;
+    if (mode === 'clean') {
+      document.title = ' ';
+    }
     document.documentElement.setAttribute('data-print-mode', mode);
     window.print();
     window.addEventListener(
       'afterprint',
       () => {
+        document.title = originalTitle;
         document.documentElement.removeAttribute('data-print-mode');
       },
       { once: true }
