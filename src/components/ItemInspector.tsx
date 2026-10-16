@@ -235,14 +235,14 @@ export const ItemInspector: React.FC<ItemInspectorProps> = ({
       {/* --- Nome / Cliente: aggiornamento istantaneo su canvas e riepilogo ------ */}
       <label className="block space-y-1">
         <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-          Nome / Cliente
+          Etichetta
         </span>
         <input
           type="text"
           id="item-inspector-name"
           value={selectedItem ? selectedItem.name : sharedName}
           onChange={(e) => onUpdateItemProperties(selectedIds, { name: e.target.value })}
-          placeholder={isMultiSelection ? 'Assegna nome a tutti...' : 'Es. Cliente / Macchinario'}
+          placeholder={isMultiSelection ? 'Assegna etichetta a tutti...' : 'esempio [nome_destinatario]'}
           className="w-full bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
       </label>

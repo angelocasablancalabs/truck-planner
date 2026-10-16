@@ -1170,6 +1170,11 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
                     <span className="text-xs font-bold text-slate-800 tracking-tight truncate">
                       {pallet.name}
                     </span>
+                    {pallet.sizeLabel && (
+                      <span className="text-[10px] font-normal text-slate-400 tracking-tight tabular-nums shrink-0">
+                        {pallet.sizeLabel}
+                      </span>
+                    )}
                   </button>
 
                   {/* Comandi rapidi: 1 collo al volo, senza aprire il cassetto */}
@@ -1239,14 +1244,14 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
 
                       <label className="flex-1 min-w-0 space-y-1">
                         <span className="block text-[10px] font-bold text-slate-500 uppercase">
-                          Cliente / Lotto
+                          Etichetta
                         </span>
                         <input
                           type="text"
                           id={`batch-name-${pallet.code}`}
                           value={draft.name}
                           onChange={(e) => updateBatchDraft(pallet, { name: e.target.value })}
-                          placeholder="Es. CONAD"
+                          placeholder="esempio [nome_destinatario]"
                           className="w-full bg-white border border-slate-300 text-xs rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         />
                       </label>
@@ -1403,13 +1408,13 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             >
               <label className="block space-y-1">
                 <span className="block text-[10px] font-bold text-slate-500 uppercase">
-                  Nome / Cliente
+                  Etichetta
                 </span>
                 <input
                   type="text"
                   value={customName}
                   onChange={(e) => setCustomName(e.target.value)}
-                  placeholder="Es. Macchinario"
+                  placeholder="esempio [nome_destinatario]"
                   className="w-full bg-slate-50 border border-slate-300 text-slate-800 text-xs rounded p-1.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </label>

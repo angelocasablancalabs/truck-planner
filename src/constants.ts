@@ -49,6 +49,7 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     name: 'PLT INDU',
     width: 100,
     length: 120,
+    sizeLabel: '100x120',
     color: '#E2E8F0', // Grigio sobrio
     borderColor: ITEM_BORDER_COLOR,
     rotatable: true,
@@ -58,6 +59,7 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     name: 'PLT EUR',
     width: 80,
     length: 120,
+    sizeLabel: '80x120',
     color: '#FEF08A', // Giallo tenue
     borderColor: ITEM_BORDER_COLOR,
     rotatable: true,
@@ -67,6 +69,7 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     name: 'PLT ½ EUR',
     width: 80,
     length: 60,
+    sizeLabel: '80x60',
     color: '#FED7AA', // Arancio pastello
     borderColor: ITEM_BORDER_COLOR,
     rotatable: true,
@@ -76,6 +79,7 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     name: 'CC',
     width: 56.5,
     length: 135,
+    sizeLabel: '135 x 56,5',
     color: '#DCFCE7', // Verde menta
     borderColor: ITEM_BORDER_COLOR,
     rotatable: true,
@@ -85,6 +89,7 @@ export const PALLET_CATALOG: PalletDefinition[] = [
     name: 'EC',
     width: 61,
     length: 81,
+    sizeLabel: '81x61',
     color: '#BAE6FD', // Azzurro tenue
     borderColor: ITEM_BORDER_COLOR,
     rotatable: true,

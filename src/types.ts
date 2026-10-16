@@ -14,6 +14,8 @@ export interface PalletDefinition {
   borderColor: string;
   rotatable: boolean;
   isBulk?: boolean;
+  /** Misura ufficiale mostrata in coda al nome nell'header dell'accordion (es. `100x120`). */
+  sizeLabel?: string;
 }
 
 export interface PlacedItem {
@@ -43,8 +45,8 @@ export interface ItemPositionUpdate {
 
 /**
  * Densità delle etichette stampate sopra ogni collo nel canvas:
- * - `all`:        nome cliente + quote (W × L) — comportamento storico.
- * - `client`:     solo il nome, centrato e più leggibile.
+ * - `all`:        etichetta + quote (W × L) — comportamento storico.
+ * - `client`:     solo l'etichetta, centrata e più leggibile.
  * - `dimensions`: solo le quote, centrate.
  * - `minimal`:    nessun testo, solo il blocco geometrico colorato.
  */

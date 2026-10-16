@@ -182,17 +182,29 @@ const CABINA_LABEL_OFFSET_CM = -Math.min(BAY_HEADER_TOP_CM, PLATE_BADGE_TOP_CM);
  * più mezzi affiancati, perché lo zoom d'insieme è più basso.
  */
 const CABINA_ELEVATION_CM = CABINA_LABEL_OFFSET_CM;
+
 /**
- * Ingombro verticale (cm) delle didascalie, sommato alla lunghezza del mezzo
- * per decidere se il pianale entra interamente nello schermo (Caso A).
+ * **ANCORAGGIO VERTICALE DELLA SCENA (asse Y) — unica fonte di verità.**
  *
- * Vale il **doppio** della fascia di intestazione: nel Caso A la centrale è
- * centrata e metà del margine finisce sopra la Cabina, quindi servono almeno
- * `2 × CABINA_LABEL_OFFSET_CM` perché l'header dello stallo e la targa non
- * vengano mai tagliati dal bordo alto anche nella condizione limite
- * `(L + margine) × zoom = containerH`.
+ * Restituisce la `pan.y` che tiene il **punto più alto della scena** (il bordo
+ * superiore dell'header di stallo `MEZZO n`, che sta `CABINA_LABEL_OFFSET_CM`
+ * sopra la Cabina) a `PAN_TOP_MARGIN_PX` px dal bordo alto del viewport:
+ *
+ *   `pan.y = PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM × zoom`
+ *
+ * (`CABINA_LABEL_OFFSET_CM` è una **elevazione positiva**: 128 cm sopra la
+ * Cabina.) L'asse Y non è mai centrato sull'ingombro della flotta: è **ancorato
+ * in alto**. Ne consegue che la posizione verticale dei pianali dipende dalla
+ * **sola** scala (`zoom`) e non dal numero di mezzi, dalla loro larghezza o
+ * dalla configurazione scelta: aggiungere, eliminare o riconfigurare un mezzo
+ * non può spostare in basso i pianali già in scena. La usano **sia** `fitView`
+ * (inquadratura automatica e Reset) **sia** `clampPanY` (limite alto della
+ * corsa di pan), quindi le due non possono più divergere — era proprio la loro
+ * divergenza a produrre il salto verticale di ~`CABINA_ELEVATION_CM × zoom / 2`
+ * px (≈ 30–40 px) a ogni rifacimento dell'inquadratura.
  */
-const PAN_LABEL_MARGIN_CM = 2 * CABINA_LABEL_OFFSET_CM;
+const anchoredPanY = (zoom: number): number =>
+  PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM * zoom;
 
 /**
  * Clamp rigido intelligente del pan verticale: elimina lo spazio vuoto grigio
@@ -204,15 +216,17 @@ const PAN_LABEL_MARGIN_CM = 2 * CABINA_LABEL_OFFSET_CM;
  * mentre a pianale in sagoma (`effectiveLength === vehicle.length`) il
  * comportamento resta identico al passato.
  *
- * - **Caso A** — il camion (compresi gli eventuali colli sbordati) entra
- *   interamente nell'altezza dello schermo
- *   (`(effectiveLength + PAN_LABEL_MARGIN_CM) * zoom <= containerH`): il pianale
- *   resta centrato verticalmente nel viewport e non può scivolare via.
- * - **Caso B** — il camion è più lungo dello schermo (zoom elevato): la Cabina
- *   si arresta a ridosso del bordo alto (`maxPanY = 40 + offset × zoom`, che
- *   tiene dentro anche l'header dello stallo, il badge targa e la didascalia
- *   `▲ CABINA ▲`) e le Porte posteriori a ridosso di quello basso
- *   (`minPanY = containerH - 50 - effectiveLength * zoom`).
+ * - **Caso A** — l'**intera scena logica** (fascia di intestazione + pianale +
+ *   didascalia `PORTE POSTERIORI`) entra nel viewport: la posizione verticale è
+ *   **unica** ed è quella ancorata in alto (`anchoredPanY`). Il pianale non può
+ *   scivolare via e — soprattutto — il valore coincide **esattamente** con
+ *   quello calcolato da `fitView`: nessun salto al rifacimento
+ *   dell'inquadratura.
+ * - **Caso B** — il mezzo è più lungo dello schermo (zoom elevato): corsa di pan
+ *   fra il bordo alto (`maxPanY = anchoredPanY`, che tiene dentro header,
+ *   badge targa e didascalia `▲ CABINA ▲`) e quello basso
+ *   (`minPanY = containerH − 50 − effectiveLength × zoom`). In questo ramo
+ *   `minPanY ≤ maxPanY` è sempre vero, quindi l'intervallo è ben definito.
  */
 const clampPanY = (
   panY: number,
@@ -220,16 +234,18 @@ const clampPanY = (
   effectiveLength: number,
   containerH: number
 ): number => {
-  const truckTotalHeightPx = (effectiveLength + PAN_LABEL_MARGIN_CM) * zoom;
+  // Bordo alto della corsa: la scena ancorata (stessa formula di `fitView`).
+  const anchored = anchoredPanY(zoom);
 
-  // Caso A: il camion entra interamente nello schermo → pianale centrato sul
-  // proprio ingombro effettivo (colli sbordati inclusi).
-  if (truckTotalHeightPx <= containerH) {
-    return (containerH - effectiveLength * zoom) / 2;
+  // Caso A: la scena logica entra interamente nello schermo (header ancorato in
+  // alto + pianale + margine inferiore per le Porte posteriori) → posizione
+  // verticale unica e stabile: quella ancorata.
+  if (anchored + effectiveLength * zoom + PAN_BOTTOM_MARGIN_PX <= containerH) {
+    return anchored;
   }
 
-  // Caso B: il camion è più lungo dello schermo → clamp rigoroso ai due bordi.
-  const maxPanY = PAN_TOP_MARGIN_PX + CABINA_LABEL_OFFSET_CM * zoom;
+  // Caso B: il mezzo è più lungo dello schermo → clamp rigoroso ai due bordi.
+  const maxPanY = anchored;
   const minPanY = containerH - PAN_BOTTOM_MARGIN_PX - effectiveLength * zoom;
   return Math.max(minPanY, Math.min(maxPanY, panY));
 };
@@ -239,8 +255,8 @@ const clampPanY = (
  * Etichette volutamente brevi per un look sobrio CAD.
  */
 const LABEL_DENSITY_OPTIONS: { value: LabelDensity; label: string; title: string }[] = [
-  { value: 'all', label: 'Tutto', title: 'Nome cliente + quote (W × L)' },
-  { value: 'client', label: 'Cliente', title: 'Solo nome cliente' },
+  { value: 'all', label: 'Tutto', title: 'Etichetta + quote (W × L)' },
+  { value: 'client', label: 'Etichetta', title: 'Solo etichetta' },
   { value: 'dimensions', label: 'Misure', title: 'Solo quote (W × L)' },
   { value: 'minimal', label: 'Minimal', title: 'Nessuna etichetta' },
 ];
@@ -283,13 +299,15 @@ interface ViewTransform {
 /**
  * Reset / Adatta a schermo: calcola lo zoom che fa entrare **l'intera centrale**
  * nel viewport — tutti i pianali affiancati con la loro intestazione (header
- * dello stallo, targa e didascalie) — e il pan che la centra esattamente.
+ * dello stallo, targa e didascalie) — e il pan che la centra orizzontalmente.
  *
- * L'inquadratura è guidata da due soli numeri: la larghezza totale della scena
- * (`totalWidth`, cioè i soli pianali reali) e l'**altezza logica**
- * (`logicalLength`, cioè la lunghezza del mezzo più profondo più la fascia sopra
- * la Cabina). Con un solo mezzo il risultato coincide con la vista storica del
- * singolo pianale, intestazione compresa, e il mezzo torna a grandezza piena.
+ * **L'asse Y non viene mai centrato: è ancorato in alto** (`anchoredPanY`), la
+ * stessa formula usata da `clampPanY`. Con un solo mezzo il risultato coincide
+ * con la vista storica del singolo pianale, intestazione compresa, e il mezzo
+ * torna a grandezza piena. Poiché l'ancoraggio dipende dalla sola scala, un
+ * rifacimento dell'inquadratura (aggiunta, eliminazione o riconfigurazione di
+ * un mezzo) può cambiare lo zoom e la larghezza della vista ma **non sposta mai
+ * verticalmente i pianali già in scena**.
  */
 const fitView = (
   totalWidth: number,
@@ -306,9 +324,9 @@ const fitView = (
     zoom: fitZoom,
     pan: {
       x: (viewport.w - safeWidth * fitZoom) / 2,
-      // La Cabina (Y = 0) lascia in alto la fascia dell'intestazione: il pianale
-      // risulta così centrato sul proprio ingombro reale, header compreso.
-      y: (viewport.h - safeLength * fitZoom) / 2 + CABINA_ELEVATION_CM * fitZoom,
+      // Ancora verticale unica dell'applicazione: il punto più alto della scena
+      // (header dello stallo) resta sempre a `PAN_TOP_MARGIN_PX` dal bordo alto.
+      y: anchoredPanY(fitZoom),
     },
     fitZoom,
   };
@@ -681,7 +699,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
    *  Si contano **solo i pianali reali**: da X = 0 all'estremità destra
    *  dell'ultimo mezzo in flotta. Nessuno spazio viene riservato a un ipotetico
    *  stallo successivo, così con un solo camion l'inquadratura "adatta a
-   *  schermo" lo riporta a grandezza piena e perfettamente centrato. I nuovi
+   *  schermo" lo riporta a grandezza piena e centrato orizzontalmente. I nuovi
    *  mezzi si aggiungono esclusivamente dal pulsante `+ Mezzo` della sidebar.
    * ------------------------------------------------------------------------ */
   const lastOffset = offsets[offsets.length - 1] ?? 0;
@@ -791,7 +809,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     return viewport;
   };
 
-  /** Reset / Adatta: vista d'insieme completa della centrale, centrata. */
+  /** Reset / Adatta: vista d'insieme completa della centrale, centrata in
+   *  orizzontale e ancorata in alto (stessa formula dell'inquadratura
+   *  automatica, quindi il Reset non sposta nulla in verticale). */
   const resetView = () => setView(fitView(totalWidth, logicalLength, measureViewport()));
 
   /**
@@ -820,6 +840,11 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
    * viene eliminato — o rientra in sagoma — il limite inferiore torna a filo
    * PORTE POSTERIORI e la vista vi si riallinea subito, senza restare appesa
    * nello spazio grigio in attesa di un altro movimento di rotellina.
+   *
+   * Se la scena entra interamente nel viewport (Caso A di `clampPanY`) il
+   * riallineamento restituisce **esattamente** l'ancoraggio verticale già
+   * impostato da `fitView`: la chiamata è quindi un'identità (`clampedY ===
+   * prev.pan.y`) e non produce alcuno spostamento dei pianali.
    */
   const [clampedLength, setClampedLength] = useState<number | null>(null);
   if (isViewportReady && clampedLength !== layoutLength) {
@@ -905,8 +930,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
       // 3) Rotellina pura → Pan verticale (Y): scorre il semirimorchio
       //    dall'alto (Cabina) verso il basso (Porte posteriori).
-      //    Clamp rigido: il pianale resta centrato se entra nello schermo,
-      //    altrimenti Cabina e Porte si arrestano a ridosso dei bordi.
+      //    Clamp rigido: se la scena entra nello schermo la posizione resta
+      //    ancorata in alto (nessuna corsa verticale), altrimenti Cabina e
+      //    Porte si arrestano a ridosso dei bordi.
       const deltaY = normalizeDelta(e.deltaY, e.deltaMode);
       setView((prev) => ({
         ...prev,

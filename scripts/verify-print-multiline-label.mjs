@@ -445,7 +445,7 @@ const main = async () => {
 
     const readPrintItems = () => cdp.eval(`${READ_PRINT_HELPERS} return { items: readPrintItems() };`);
 
-    await setDensity('Cliente');
+    await setDensity('Etichetta');
     const densityClient = await waitFor(async () => {
       const snapshot = await readPrintItems();
       const text = snapshot.items[0]?.texts[0];

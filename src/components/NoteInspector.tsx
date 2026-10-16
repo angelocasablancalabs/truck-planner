@@ -122,7 +122,7 @@ export const NoteInspector: React.FC<NoteInspectorProps> = ({
           value={note.content}
           onChange={(e) => onUpdateNote(note.id, { content: e.target.value })}
           rows={4}
-          placeholder="Scrivi avvertenze, cliente o note operative..."
+          placeholder="Scrivi avvertenze, istruzioni o note operative..."
           className="w-full resize-y bg-white border border-slate-300 text-slate-800 text-xs rounded p-1.5 leading-snug focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
       </label>
