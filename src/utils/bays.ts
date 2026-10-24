@@ -16,35 +16,56 @@ import type { DeckBay, VehicleConfig } from '../types';
 import { MAX_BAYS } from '../constants';
 
 /**
- * Stacco orizzontale (cm) tra due stalli affiancati.
+ * Stacco orizzontale (cm) tra due stalli affiancati in base alla flotta:
+ *  - 2 mezzi (A4 Verticale): 260 cm (ciascun mezzo è centrato nella propria metà
+ *    di foglio);
+ *  - 3 mezzi (A4 Panoramico): 430 cm (ciascun mezzo è centrato nel proprio terzo
+ *    di foglio);
+ *  - default / 1 mezzo: 260 cm.
  *
- * È lo spazio che accoglie, **senza collisioni visive**, tutto ciò che vive ai
- * lati di un pianale:
+ * Lo stacco accoglie **senza collisioni visive** tutto ciò che vive ai lati di
+ * un pianale:
  *  - a sinistra il righello metrico e il badge LDM (`LDM_BADGE_RESERVED_LEFT`),
  *    più la didascalia della quota nominale 13,20 m;
  *  - a destra il badge LDM del lato carico asimmetrico (`LDM_BADGE_RESERVED_RIGHT`).
  *
- * 180 cm sono ampiamente sufficienti per entrambi (≈ 80 cm per lato: badge LDM
- * accostato alla sponda + margine) e lasciano respiro fra la coda delle note di
- * uno stallo e la parete sinistra del successivo.
+ * Al centro esatto dello stacco vive il **divisore verticale** fra due mezzi
+ * adiacenti (vedi `BAY_DIVIDER_COLOR` / `BAY_DIVIDER_STROKE_WIDTH`).
  */
-export const BAY_SPACING_CM = 180;
+export const getBaySpacing = (totalBays: number): number => {
+  if (totalBays >= 3) return 430;
+  return 260;
+};
+
+/**
+ * Stacco storico di riferimento (cm) fra due stalli affiancati, mantenuto per
+ * retrocompatibilità dove serve un singolo valore costante: coincide con lo
+ * stacco di una centrale a 2 mezzi (`getBaySpacing(2)`).
+ */
+export const BAY_SPACING_CM = 260;
+
+/** Colore CAD del divisore verticale centrato fra due stalli adiacenti. */
+export const BAY_DIVIDER_COLOR = '#CBD5E1';
+
+/** Spessore del divisore verticale (unità del mondo, cm). */
+export const BAY_DIVIDER_STROKE_WIDTH = 1.5;
 
 /**
  * Traslazione orizzontale (cm) di ciascuno stallo, nell'ordine della flotta.
  *
- * La formula è cumulativa e tiene conto della **larghezza reale** del mezzo:
- * `offset[0] = 0` e `offset[i] = offset[i-1] + larghezza[i-1] + BAY_SPACING_CM`.
- * Un bilico da 2,50 m seguito da una motrice da 2,50 m dista quindi 180 cm dal
- * precedente, indipendentemente da quanto sia lungo il suo pianale.
+ * La formula è cumulativa e tiene conto della **larghezza reale** del mezzo e
+ * dello stacco adattivo della flotta: `offset[0] = 0` e
+ * `offset[i] = offset[i-1] + larghezza[i-1] + getBaySpacing(bays.length)`.
+ * Con 2 mezzi (A4 verticale) lo stacco è 260 cm, con 3 (A4 panoramico) è 430 cm.
  */
 export const bayOffsets = (bays: DeckBay[]): number[] => {
+  const spacing = getBaySpacing(bays.length);
   const offsets: number[] = [];
   let cursor = 0;
 
   for (const bay of bays) {
     offsets.push(cursor);
-    cursor += bay.vehicle.width + BAY_SPACING_CM;
+    cursor += bay.vehicle.width + spacing;
   }
 
   return offsets;
@@ -119,8 +140,9 @@ export const BAY_HEADER_HEIGHT_CM = BAY_HEADER_BOTTOM_CM - BAY_HEADER_TOP_CM;
 
 /**
  * Larghezza (cm) dell'header: **compatta e centrata** sulla larghezza del
- * pianale. Resta ben dentro lo stacco fra due stalli (`BAY_SPACING_CM = 180`),
- * così la pillola di un mezzo non può mai invadere il pianale del successivo.
+ * pianale. Resta ben dentro lo stacco minimo fra due stalli
+ * (`getBaySpacing(2) = 260`), così la pillola di un mezzo non può mai invadere
+ * il pianale del successivo.
  */
 export const BAY_HEADER_WIDTH_CM = 140;
 

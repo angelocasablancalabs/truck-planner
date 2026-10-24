@@ -1,6 +1,6 @@
 import type { DeckBay, LabelDensity, PlacedItem, SideNote, VehicleConfig } from '../types';
 import { calculateLdmMetrics, formatLdmMeters, hasCollision, isOutOfBounds } from './snapping';
-import { bayOffsets } from './bays';
+import { BAY_DIVIDER_COLOR, BAY_DIVIDER_STROKE_WIDTH, bayOffsets, getBaySpacing } from './bays';
 import {
   ALERT_COLOR,
   LDM_BADGE,
@@ -822,6 +822,25 @@ export const buildFleetSvg = (bays: DeckBay[], labelDensity: LabelDensity): Pian
   if (clipDefs.length > 0) parts.push(`<defs>${clipDefs}</defs>`);
 
   const offsets = bayOffsets(bays);
+
+  // Divisori verticali fra stalli adiacenti: linea CAD sottile centrata nello
+  // stacco adattivo della flotta (`getBaySpacing`: 260 cm con 2 mezzi, 430 cm con
+  // 3). Vivono dietro i pianali e coprono la fascia dell'header/targa,
+  // fermandosi 50 cm oltre il mezzo più lungo della coppia.
+  const spacing = getBaySpacing(bays.length);
+  if (bays.length > 1) {
+    for (let index = 0; index < bays.length - 1; index += 1) {
+      const dividerX = offsets[index] + bays[index].vehicle.width + spacing / 2;
+      const yTop = -100;
+      const yBottom =
+        Math.max(bays[index].vehicle.length, bays[index + 1].vehicle.length) + 50;
+
+      parts.push(
+        `<line x1="${round(dividerX)}" y1="${round(yTop)}" x2="${round(dividerX)}" y2="${round(yBottom)}" stroke="${BAY_DIVIDER_COLOR}" stroke-width="${BAY_DIVIDER_STROKE_WIDTH}" stroke-linecap="round"/>`
+      );
+    }
+  }
+
   bays.forEach((bay, index) => {
     const bayExtent = getBayExtent(
       bay.vehicle,

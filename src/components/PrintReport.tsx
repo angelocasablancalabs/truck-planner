@@ -5,7 +5,7 @@ import { LDM_BADGE, LDM_BADGE_CENTER_X, LDM_BADGE_COLOR, LDM_BADGE_LEFT_X, LDM_B
 import { calculateLdmMetrics, formatLdmMeters } from '../utils/snapping';
 import type { LdmMetrics } from '../utils/snapping';
 import { getFleetExtent, getPianoExtent, noteClipId } from '../utils/export';
-import { bayOffsets } from '../utils/bays';
+import { BAY_DIVIDER_COLOR, BAY_DIVIDER_STROKE_WIDTH, bayOffsets, getBaySpacing } from '../utils/bays';
 import { resolveNoteLayouts, NOTE_PADDING_CM } from '../utils/sideNotes';
 import {
   AVERAGE_CHAR_WIDTH_RATIO,
@@ -920,6 +920,31 @@ export const PrintReport: React.FC<PrintReportProps> = ({ bays, labelDensity }) 
                 />
               );
             })}
+            {/* Divisori verticali fra mezzi adiacenti: stessa geometria e stile
+                CAD del canvas a schermo e dello snapshot SVG (centro esatto
+                dello stacco adattivo della flotta: 260 cm con 2 mezzi, 430 cm
+                con 3). */}
+            {bays.length > 1 &&
+              bays.slice(0, -1).map((bay, index) => {
+                const spacing = getBaySpacing(bays.length);
+                const dividerX = offsets[index] + bay.vehicle.width + spacing / 2;
+                const nextBay = bays[index + 1];
+                const yTop = -100;
+                const yBottom = Math.max(bay.vehicle.length, nextBay.vehicle.length) + 50;
+
+                return (
+                  <line
+                    key={`print-bay-divider-${index}`}
+                    x1={round(dividerX)}
+                    y1={yTop}
+                    x2={round(dividerX)}
+                    y2={round(yBottom)}
+                    stroke={BAY_DIVIDER_COLOR}
+                    strokeWidth={BAY_DIVIDER_STROKE_WIDTH}
+                    strokeLinecap="round"
+                  />
+                );
+              })}
           </svg>
         </div>
       </section>

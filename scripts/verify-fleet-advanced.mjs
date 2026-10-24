@@ -603,10 +603,10 @@ const main = async () => {
       };
     `);
     check(
-      'Centrale al completo (3/3): `Clona` e `+ Mezzo` spariscono, i tre stalli si affiancano a 180 cm',
+      'Centrale al completo (3/3): `Clona` e `+ Mezzo` spariscono, i tre stalli si affiancano a 430 cm',
       full.label === 'Centrale (3/3 Mezzi)' &&
         full.clone.present === false &&
-        JSON.stringify(full.offsets) === JSON.stringify([0, 430, 860]),
+        JSON.stringify(full.offsets) === JSON.stringify([0, 680, 1360]),
       `${full.label} · offsets=${full.offsets.join('/')}`
     );
     check(
@@ -665,8 +665,8 @@ const main = async () => {
       `ordine=${swapped.ids.join(' | ')}`
     );
     check(
-      'Gli offset del mondo si riallineano all\'istante (0 / 430 / 860 cm)',
-      JSON.stringify(swapped.offsets) === JSON.stringify([0, 430, 860]),
+      'Gli offset del mondo si riallineano all\'istante (0 / 680 / 1360 cm)',
+      JSON.stringify(swapped.offsets) === JSON.stringify([0, 680, 1360]),
       swapped.offsets.join('/')
     );
     check(
@@ -724,7 +724,7 @@ const main = async () => {
     check(
       'UN solo `Ctrl + Z` riporta la flotta all\'ordine di partenza (offset e quote comprese)',
       JSON.stringify(restoredOrder.ids) === JSON.stringify(full.ids) &&
-        JSON.stringify(restoredOrder.offsets) === JSON.stringify([0, 430, 860]) &&
+        JSON.stringify(restoredOrder.offsets) === JSON.stringify([0, 680, 1360]) &&
         JSON.stringify(restoredOrder.headers) === JSON.stringify(['MEZZO 1', 'MEZZO 2', 'MEZZO 3']) &&
         JSON.stringify(restoredOrder.counts) === JSON.stringify(full.counts) &&
         JSON.stringify(restoredOrder.pages) === JSON.stringify(full.ids),

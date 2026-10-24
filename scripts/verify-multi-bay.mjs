@@ -10,8 +10,9 @@
  *       d'ingresso di un nuovo mezzo nella centrale, fino a `MAX_BAYS`. Sul
  *       canvas **non esiste alcuno slot fantasma**: i pianali disegnati sono
  *       esclusivamente quelli reali della flotta;
- *    2. **Affiancamento**: il primo stallo resta a `X = 0`, il secondo a
- *       `larghezza + 180 cm` (stacco `BAY_SPACING_CM`), il terzo a catena;
+ *    2. **Affiancamento adattivo**: il primo stallo resta a `X = 0`, il secondo
+ *       a `larghezza + 260 cm` (2 mezzi, A4 verticale), il terzo a catena con
+ *       stacco di 430 cm (3 mezzi, A4 panoramico);
  *    3. **Limite di flotta**: dopo il terzo mezzo il pulsante di aggiunta
  *       sparisce (`MAX_BAYS = 3`);
  *    4. **Pillole della sidebar** `Mezzo 1 / 2 / 3`: il click cambia il Mezzo
@@ -54,8 +55,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-/** Stacco ufficiale fra due stalli affiancati (`BAY_SPACING_CM`). */
-const BAY_SPACING_CM = 180;
+/** Stacco adattivo (cm) fra gli stalli: 260 con 2 mezzi, 430 con 3. */
+const BAY_SPACING_CM = 260;
+const BAY_SPACING_CM_THREE = 430;
 /** Numero massimo di mezzi della centrale (`MAX_BAYS`). */
 const MAX_BAYS = 3;
 
@@ -491,9 +493,9 @@ const main = async () => {
       `pillole=${two.pills.map((p) => `${p.text}:${p.pressed}`).join(' | ')}`
     );
     check(
-      'Affiancamento: stallo 2 a larghezza mezzo 1 + 180 cm = 430 cm',
+      'Affiancamento: stallo 2 su 2 mezzi centrato a metà A4 (250 + 260 = 510 cm)',
       two.bays[1].cm === 250 + BAY_SPACING_CM,
-      `offset ${two.bays[1].cm} cm`
+      `offset misurato = ${two.bays[1].cm} cm (atteso 510 cm)`
     );
     check(
       'In pixel la traslazione reale è proporzionale (stallo 2 a destra dello stallo 1)',
@@ -564,9 +566,10 @@ const main = async () => {
       `${three.bayCount} stalli`
     );
     check(
-      'Affiancamento a catena: stallo 3 a 430 + 250 + 180 = 860 cm',
-      three.bays[2].cm === 430 + 250 + BAY_SPACING_CM,
-      `offset ${three.bays[2].cm} cm`
+      'Affiancamento a catena su 3 mezzi (A4 panoramico a 3 terzi): offset 680 e 1360 cm',
+      three.bays[1].cm === 250 + BAY_SPACING_CM_THREE &&
+        three.bays[2].cm === 250 + BAY_SPACING_CM_THREE + 250 + BAY_SPACING_CM_THREE,
+      `offset misurati = ${three.bays.map((b) => b.cm).join('/')} cm`
     );
     check(
       'A flotta completa (MAX_BAYS = 3) il pulsante di aggiunta mezzo sparisce',

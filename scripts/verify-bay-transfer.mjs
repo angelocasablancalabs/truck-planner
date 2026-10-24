@@ -5,8 +5,9 @@
  *  verifica end-to-end l'interazione di flotta fra due stalli affiancati:
  *
  *    1. **Drag & Drop cross-pianale**: un collo trascinato da MEZZO 1 supera le
- *       sponde, viaggia nel canale di 180 cm e al rilascio su MEZZO 2 viene
- *       trasferito (stiva locale del bersaglio, Mezzo Attivo che segue);
+ *       sponde, viaggia nel canale neutro di 260 cm (2 mezzi, A4 verticale) e al
+ *       rilascio su MEZZO 2 viene trasferito (stiva locale del bersaglio, Mezzo
+ *       Attivo che segue);
  *    2. **Drag Overlay**: durante il transito il collo vive nel layer globale
  *       `#canvas-drag-overlay` (in testa al DOM, sopra il fondo bianco dei
  *       camion) e nello stallo di partenza resta la sola **sagoma fantasma**
@@ -14,8 +15,8 @@
  *    3. **Zona di rilascio**: entrando nella sagoma di MEZZO 2 compare il
  *       contorno di evidenziazione con il badge `📥 Rilascia per caricare su
  *       MEZZO 2`;
- *    4. **Annullamento elastico (Opzione A)**: un rilascio nel canale di 180 cm
- *       non muta la stiva e non aggiunge passi alla cronologia;
+ *    4. **Annullamento elastico (Opzione A)**: un rilascio nel canale neutro di
+ *       260 cm non muta la stiva e non aggiunge passi alla cronologia;
  *    5. **Un solo passo di Undo**: il trasferimento si annulla con un unico
  *       `Ctrl + Z`, che riporta i colli su MEZZO 1;
  *    6. **Pulsante `➔ MEZZO n` dell'ItemInspector**: sposta i colli selezionati
@@ -421,11 +422,11 @@ const main = async () => {
     const targetBay = scene0.bays.find((b) => b.id === targetBayId);
     const targetWorldY = itemCenter.worldY;
     const to = worldToScreen(scene0, targetBay.offset + 30, targetWorldY);
-    // Zona neutra: metà esatta del canale di 180 cm fra i due stalli.
+    // Zona neutra: metà esatta del canale di 260 cm fra i due stalli.
     const neutralBay = scene0.bays.find((b) => b.id === sourceBayId);
     const neutral = worldToScreen(
       scene0,
-      neutralBay.offset + neutralBay.width + 90,
+      neutralBay.offset + neutralBay.width + 130,
       itemCenter.worldY
     );
 
@@ -436,7 +437,7 @@ const main = async () => {
     await sleep(90);
     const inSource = await cdp.eval(DRAG_STATE);
 
-    // Transito nel canale neutro di 180 cm.
+    // Transito nel canale neutro di 260 cm.
     await dispatchMove(cdp, neutral.x, neutral.y);
     await sleep(120);
     const inChannel = await cdp.eval(DRAG_STATE);
@@ -461,7 +462,7 @@ const main = async () => {
       JSON.stringify(inSource.ghosts)
     );
     check(
-      'Nel canale di 180 cm il collo è in transito libero: bordo ambra tratteggiato e dicitura `(zona neutra)`',
+      'Nel canale neutro di 260 cm il collo è in transito libero: bordo ambra tratteggiato e dicitura `(zona neutra)`',
       inChannel.overlayPresent === true &&
         inChannel.overlayMemberCount === 1 &&
         inChannel.overlayStroke === '#F59E0B' &&
@@ -544,7 +545,7 @@ const main = async () => {
         const y = Number(m[2]);
         // La posizione attesa è quella ANTEPRIMA dall'overlay nell'ultimo frame
         // (già agganciata alla parete e convertita in locali): se coincidesse con
-        // la traslazione di MEZZO 1 (430 cm) il travaso sarebbe corrotto.
+        // la traslazione di MEZZO 1 (510 cm) il travaso sarebbe corrotto.
         const previewMatch = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(
           overTargetState.overlayTransforms[0] ?? ''
         );
@@ -582,7 +583,7 @@ const main = async () => {
       `${afterUndo.map((b) => b.items.length).join('/')} colli`
     );
 
-    /* --- 4) Annullamento elastico nel canale di 180 cm (Opzione A) ------- */
+    /* --- 4) Annullamento elastico nel canale neutro di 260 cm (Opzione A) - */
     // Prima del gesto si attiva esplicitamente il mezzo che ospita il collo: il
     // gesto deve partire da uno stallo comandato, come farebbe l'operatore.
     const itemHome = await cdp.eval(`
@@ -623,10 +624,11 @@ const main = async () => {
     const otherBay = scene1.bays.find((b) => b.id !== currentCenter.bayId);
 
     const start = worldToScreen(scene1, currentCenter.worldX, currentCenter.worldY);
-    // Canale neutro: metà esatta dello stacco fra lo stallo di casa e il vicino.
+    // Canale neutro: metà esatta dello stacco di 260 cm fra lo stallo di casa e
+    // il vicino (`offset[1] = 250 + 260 = 510`, centro del canale a 380 cm).
     const channel = worldToScreen(
       scene1,
-      homeBay.offset + homeBay.width + 90,
+      homeBay.offset + homeBay.width + 130,
       currentCenter.worldY
     );
 

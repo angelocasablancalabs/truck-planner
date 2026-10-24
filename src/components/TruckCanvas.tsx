@@ -74,8 +74,11 @@ import {
   BAY_HEADER_TITLE_FONT_CM,
   BAY_HEADER_TOP_CM,
   BAY_HEADER_WIDTH_CM,
+  BAY_DIVIDER_COLOR,
+  BAY_DIVIDER_STROKE_WIDTH,
   bayLabel,
   bayOffsets,
+  getBaySpacing,
 } from '../utils/bays';
 
 /** Colori del rettangolo di selezione (lasso) e della selezione attiva. */
@@ -358,7 +361,7 @@ const zoomAroundPoint = (prev: ViewTransform, nextZoom: number, mouse: Point): V
  *
  * Dalla **Fase 2** il gesto non è più confinato al pianale di partenza: il
  * cursore viene seguito in **coordinate di mondo** (`startCursor`), così il
- * gruppo può attraversare il canale di 180 cm fra due stalli e agganciarsi a un
+ * gruppo può attraversare il canale neutro fra due stalli e agganciarsi a un
  * altro mezzo. Per questo lo stato ricorda lo stallo di origine e la sua
  * traslazione: servono a riportare il cursore nel sistema locale del pianale
  * che di volta in volta si trova sotto il puntatore.
@@ -416,8 +419,8 @@ interface DragOverlayMember {
  * Stato del **Drag Overlay** (livello SVG globale in testa al DOM): vive solo
  * durante il trascinamento di colli e descrive il blocco in movimento.
  *
- * - `targetBayId === null` → il cursore è nel **canale di 180 cm** (o fuori
- *   sagoma): i colli volano liberi, non agganciati, e al rilascio scatta
+ * - `targetBayId === null` → il cursore è nel **canale neutro fra due stalli**
+ *   (o fuori sagoma): i colli volano liberi, non agganciati, e al rilascio scatta
  *   l'**annullamento elastico** (Opzione A: nessuna mutazione, nessun passo di
  *   Undo).
  * - `targetBayId === sourceBayId` → spostamento interno al pianale di partenza
@@ -427,7 +430,7 @@ interface DragOverlayMember {
  */
 interface DragOverlayState {
   sourceBayId: string;
-  /** Stallo sotto il cursore, oppure `null` nel canale di 180 cm. */
+  /** Stallo sotto il cursore, oppure `null` nel canale neutro fra due stalli. */
   targetBayId: string | null;
   /** Indice dello stallo bersaglio (`-1` quando `targetBayId` è `null`). */
   targetBayIndex: number;
@@ -552,7 +555,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
 
   /**
    * **Drag Overlay**: descrive il blocco di colli attualmente in movimento fra
-   * gli stalli (o nel canale neutro di 180 cm). Vive solo durante il gesto: è
+   * gli stalli (o nel canale neutro fra due stalli). Vive solo durante il gesto: è
    * alimentato da `handlePointerMove` e consumato da `handlePointerUp`, che da
    * qui ricava lo stallo bersaglio e le coordinate locali da salvare.
    */
@@ -1135,8 +1138,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     //    seguito in cm di mondo e, a ogni frame, si determina quale stallo della
     //    centrale sta sotto il puntatore. Se è il pianale di origine vale la
     //    fisica di sempre; se è un ALTRO mezzo il blocco si aggancia
-    //    magneticamente alle sue pareti e ai suoi colli; nel canale di 180 cm
-    //    fra due stalli (o fuori dalla flotta) il blocco vola libero.
+    //    magneticamente alle sue pareti e ai suoi colli; nel canale neutro fra
+    //    due stalli (o fuori dalla flotta) il blocco vola libero.
     const drag = draggingItem.current;
     if (!drag) return;
     const cursor = toCanvasCm(e.clientX, e.clientY);
@@ -1167,7 +1170,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         (view) => cursor.x >= view.offset && cursor.x <= view.offset + view.bay.vehicle.width
       ) ?? null;
 
-    /* --- Caso A: il cursore è nel canale di 180 cm (o fuori dalla flotta) ---
+    /* --- Caso A: il cursore è nel canale neutro fra due stalli (o fuori dalla
+     * flotta) ---
      * Nessuno snap: il blocco segue il puntatore in coordinate di mondo e, al
      * rilascio, l'operazione viene **annullata elasticamente** (Opzione A). */
     if (!hoveredBayView) {
@@ -1381,7 +1385,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
      *   - rilascio su un ALTRO mezzo  → trasferimento atomico cross-pianale;
      *   - rilascio sullo stesso mezzo → posizioni già aggiornate live, si
      *     convalida il fotogramma;
-     *   - rilascio nel canale di 180 cm (Opzione A) → **annullamento elastico**:
+     *   - rilascio nel canale neutro fra due stalli (Opzione A) → **annullamento
+     *     elastico**:
      *     nessuna mutazione è mai avvenuta (la stiva non è stata toccata durante
      *     il transito), i colli rientrano da soli alla posizione di partenza e
      *     nessun passo viene aggiunto alla cronologia.
@@ -1409,7 +1414,8 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
         // colli appena trasferiti) non deve essere azzerata.
         suppressBackgroundClick.current = true;
       } else {
-        // Click puro oppure rilascio nel canale di 180 cm: nessun passo di Undo.
+        // Click puro oppure rilascio nel canale neutro fra due stalli: nessun
+        // passo di Undo.
         onCommitHistoryGesture(false);
       }
       setDragOverlay(null);
@@ -1601,7 +1607,7 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
     const isActive = view.bay.id === activeBayId;
     // Pillola **centrata** sulla larghezza del pianale: con un solo mezzo il
     // riquadro resta sull'asse del camion, con più mezzi non invade mai il
-    // pianale successivo (140 cm su 180 cm di stacco).
+    // pianale successivo (140 cm sullo stacco minimo di 260 cm).
     const headerX = (view.bay.vehicle.width - BAY_HEADER_WIDTH_CM) / 2;
     // Bordo destro **utile**: il badge `ATTIVO` si accosta a questo margine.
     const rightX = headerX + BAY_HEADER_WIDTH_CM - BAY_HEADER_PADDING_CM;
@@ -1758,6 +1764,34 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
             transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}
             style={{ visibility: isViewportReady ? 'visible' : 'hidden' }}
           >
+            {/* DIVISORI VERTICALI fra stalli adiacenti: una linea CAD sottile,
+                centrata nell'esatto stacco adattivo della flotta
+                (`getBaySpacing`: 260 cm con 2 mezzi, 430 cm con 3). Copre la
+                fascia dell'header/targa in alto e si ferma 50 cm oltre il
+                pianale più lungo della coppia, così non taglia le porte. */}
+            {bayViews.length > 1 &&
+              bayViews.slice(0, -1).map((view, idx) => {
+                const spacing = getBaySpacing(bayViews.length);
+                const dividerX = view.offset + view.bay.vehicle.width + spacing / 2;
+                const yTop = -100;
+                const yBottom =
+                  Math.max(view.bay.vehicle.length, bayViews[idx + 1].bay.vehicle.length) + 50;
+
+                return (
+                  <line
+                    key={`bay-divider-${idx}`}
+                    data-canvas-bay-divider={idx}
+                    x1={dividerX}
+                    y1={yTop}
+                    x2={dividerX}
+                    y2={yBottom}
+                    stroke={BAY_DIVIDER_COLOR}
+                    strokeWidth={BAY_DIVIDER_STROKE_WIDTH}
+                    strokeLinecap="round"
+                  />
+                );
+              })}
+
             {/* UN GRUPPO PER CIASCUN MEZZO: il pianale, la cabina, le porte, le
                 tacche metriche, i colli e le note vivono nelle coordinate LOCALI
                   dello stallo; è questa traslazione ad affiancarli nella scena. */}
@@ -2309,8 +2343,9 @@ export const TruckCanvas: React.FC<TruckCanvasProps> = ({
              *
              *  I colli in movimento vivono QUI, in coordinate di mondo, sopra
              *  **tutti** gli stalli: il fondo bianco (`fill="white"`) del camion
-             *  adiacente non può più coprirli mentre attraversano il canale di
-             *  180 cm. L'ombra CAD (`drop-shadow-lg`) li stacca dal piano e il
+             *  adiacente non può più coprirli mentre attraversano il canale
+             *  neutro fra due stalli. L'ombra CAD (`drop-shadow-lg`) li stacca
+             *  dal piano e il
              *  layer non intercetta alcun evento (`pointerEvents="none"`), così il
              *  pointer capture del gesto resta sul collo di partenza.
              * ----------------------------------------------------------------- */}
